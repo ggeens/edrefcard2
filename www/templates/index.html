@@ -135,23 +135,34 @@
                         <input type="radio" name="keyboard_display" value="visual-ansi">
                         <span>🎹 Visual ANSI 104 (QWERTY key labels)</span>
                     </label>
+                    <label class="radio-item">
+                        <input type="radio" name="keyboard_display" value="visual-iso-azerty">
+                        <span>🎹 Visual ISO 105 (AZERTY key labels)</span>
+                    </label>
                 </div>
 
                 <p class="text-muted mt-1" style="font-size: 0.85rem;">
-                    💡 Visual keyboard uses QWERTY key labels.
-                    AZERTY/QWERTZ users: use Text List for clarity.
+                    💡 Pick the visual keyboard matching your OS layout.
+                    QWERTZ layout not available yet: use Text List for now.
                 </p>
             </div>
 
-            <!-- Publishing Section -->
+            <!-- Sharing Section -->
             <div class="form-section">
-                <h3>📤 Publish (Optional)</h3>
-                <p>Add a description to share your bindings publicly:</p>
+                <h3>📤 Sharing</h3>
+                <p>Card title (optional):</p>
 
                 <input type="text" name="description" placeholder="e.g., My HOTAS setup for combat..." maxlength="190">
 
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-top:0.75rem;cursor:pointer">
+                    <input type="checkbox" name="public" checked style="margin-top:0.2rem">
+                    <span>List this card in the public catalogue, so other CMDRs can browse it for
+                        binding ideas. Untick to keep it <strong>unlisted</strong>: only people with
+                        the link will be able to view it.</span>
+                </label>
+
                 <p class="text-muted mt-1" style="font-size: 0.85rem;">
-                    Descriptions are curated. Offensive or spammy content will be removed.
+                    Titles are curated. Offensive or spammy content will be removed.
                 </p>
             </div>
 

@@ -1,0 +1,84 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Mapper guide{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📖 Mapper guide</h1>
+    <p>How to add a new controller to EDRefCard with the mapping editor. A typical stick takes 10-20 minutes.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>What you are building</h2></div>
+    <p>A <strong>mapping</strong> ties a clean photo of a controller to its physical controls:
+       each <strong>box</strong> groups the rows of one physical control (a hat, a trigger, an axis...)
+       and points to it with a leader line. When a player uploads their <code>.binds</code> file,
+       the engine fills your boxes with <em>their</em> bindings and hides the unused ones.
+       So the mapping should cover <strong>every control on the device</strong>, not just the ones you personally bind.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Workflow</h2></div>
+    <ol style="line-height:1.9">
+        <li>Open the <a href="{{ url_for('admin.controllers') }}" style="color:var(--ed-orange)">Controllers</a> page.
+            If the device is in the <strong>Unknown devices</strong> queue, click <strong>Scaffold</strong>:
+            the editor opens pre-filled from a real .binds. Otherwise open the
+            <a href="{{ url_for('admin.mapping_editor') }}" style="color:var(--ed-orange)">Mapping Editor</a> directly.</li>
+        <li><strong>Upload a clean product photo</strong> (manufacturer press shot or your own, no overlays, no watermarks).
+            Keep "side margins" ticked: the photo is placed in the middle of a wider canvas so your boxes have room on both sides.</li>
+        <li>No .binds to start from? Use <strong>Blank scaffold</strong> (buttons / POVs / axes counts) to generate the rows from the manual.</li>
+        <li>Use the <strong>stamps</strong> for anything missing: pick a stamp, then click the physical control on the photo.
+            One click per control; a 4-way hat with push is a single click, its 5 rows are pre-filled and Joy_N numbering auto-increments.</li>
+        <li>For scaffolded boxes, click <strong>Set btn</strong> then click the control on the photo to anchor the leader line.</li>
+        <li>Click <strong>Arrange</strong>: boxes are sorted into two columns by anchor position, so leader lines never cross.
+            Sizes are normalised automatically. Do not spend time pixel-pushing box sizes.</li>
+        <li>Fix labels, numbers and Joy_N values in the right-hand panel (check them against the manual or a .binds).</li>
+        <li><strong>Preview</strong> renders the real card server-side. Iterate until the layout reads well.</li>
+        <li><strong>Save draft</strong>. Every save, including an admin's save, is a draft.
+            If this controller is already published, its public revision stays unchanged.
+            An admin reviews the saved draft and uses <strong>Publish draft</strong> on Controllers to release it.</li>
+    </ol>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Stamps</h2></div>
+    <table>
+        <thead><tr><th>Stamp</th><th>One click gives you</th></tr></thead>
+        <tbody>
+            <tr><td>Button</td><td>1 row (press), Joy_N auto-incremented</td></tr>
+            <tr><td>Hat 4-way</td><td>4 rows (up/right/down/left), Joy_N..N+3</td></tr>
+            <tr><td>Hat 4-way + push</td><td>5 rows, Joy_N..N+4</td></tr>
+            <tr><td>POV</td><td>4 rows Joy_POVnUp/Right/Down/Left</td></tr>
+            <tr><td>2-stage trigger</td><td>stage 1 + stage 2 rows</td></tr>
+            <tr><td>Stick (X+Y)</td><td>2 analogue rows (Joy_XAxis / Joy_YAxis)</td></tr>
+            <tr><td>Axis</td><td>1 empty analogue row (set the Joy_?Axis yourself)</td></tr>
+        </tbody>
+    </table>
+    <p style="color:var(--text-secondary);font-size:0.85rem">Axis names in Elite: X/Y = stick, Z = twist, RZ = brake/rudder,
+       U = slider, V = dial. POV hats send Joy_POVn*, thumb hats usually send plain Joy_N buttons; a real .binds settles any doubt.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Shortcuts &amp; safety nets</h2></div>
+    <ul style="line-height:1.9">
+        <li><strong>Ctrl + mouse wheel</strong> zoom (around the cursor) &middot; <strong>Space + drag</strong> pan &middot; <strong>Fit</strong> resets</li>
+        <li><strong>Arrows</strong> nudge the selected box (Shift = x10) &middot; <strong>Del</strong> delete &middot; <strong>Ctrl+D</strong> duplicate</li>
+        <li><strong>Ctrl+Z / Ctrl+Y</strong> undo/redo (100 full-document steps, including imports)</li>
+        <li>Your unsaved work is stored in this browser. After a crash or refresh, choose
+            <em>Restore local draft</em> or <em>Discard local draft</em> before editing.
+            Downloads and server saves are still recommended; browser storage can be unavailable.</li>
+        <li>If someone else saved the same mapping while you were editing, Save is refused with a message instead of overwriting their work</li>
+    </ul>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Ground rules</h2></div>
+    <ul style="line-height:1.9">
+        <li><strong>Exhaustive beats personal</strong>: map every physical control, not just your own bindings. Players with different profiles must be able to use the card.</li>
+        <li><strong>Cite your source</strong>: manufacturer manual or callout sheet preferred; your own hardware is even better.</li>
+        <li><strong>Photos</strong>: neutral background, straight-on angle, high resolution. Ask if unsure about rights.</li>
+        <li><strong>L/R variants</strong>: map one side only; an admin can generate the mirrored variant in one click.</li>
+        <li>Stuck, or want a review before publish? Ping the admin (forum DM or Discord). Saving a draft never breaks anything public.</li>
+    </ul>
+</div>
+{% endblock %}

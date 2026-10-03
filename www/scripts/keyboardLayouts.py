@@ -37,6 +37,25 @@ keyboardLayouts = {
         [{'w': 1.25}, ['Ctrl__L', 'Key_LeftControl'], {'w': 1.25}, ['Win__L', 'Key_LeftWindows'], {'w': 1.25}, ['Alt__L', 'Key_LeftAlt'], {'a': 7, 'w': 6.25}, [' ', 'Key_Space'], {'a': 4, 'w': 1.25}, 'AltGr', {'w': 1.25}, ['Win__R', 'Key_RightWindows'], {'w': 1.25}, 'Menu', {'w': 1.25}, ['Ctrl__R', 'Key_RightControl'],
             {'x': 0.25}, ['←', 'Key_LeftArrow'], ['↓', 'Key_DownArrow'], ['→', 'Key_RightArrow'], {'x': 0.25, 'w': 2}, ['0__N\nIns__N', 'Key_Numpad_0'], ['.__N\nDel__N', 'Key_Numpad_Decimal']],
     ],
+    # French AZERTY on the ISO 105 physical layout. Elite names keys after the
+    # character they produce on the OS layout; the Key_* names below were
+    # extracted from a real French .binds (2026-07-11). The few keys not seen
+    # in the wild yet (Circumflex, Dollar, Asterisk, SemiColon, Colon) use
+    # Frontier's symbolic naming convention; the on-card "No keycaps" notice
+    # will flag them if a real file ever proves otherwise.
+    'ISO 105 AZERTY': [
+        ['Esc', {'x': 1}, 'F1', 'F2', 'F3', 'F4', {'x': 0.5}, 'F5', 'F6', 'F7', 'F8', {'x': 0.5}, 'F9', 'F10', 'F11', 'F12', {'x': 0.25}, 'PrtSc', ['ScrLk', 'Key_ScrollLock'], ['Pause\nBreak', 'Key_Pause']],
+        [{'y': 0.5}, ['²', 'Key_SuperscriptTwo'], ['1\n&', 'Key_Ampersand'], ['2\né', 'Key_é'], ['3\n"', 'Key_DoubleQuote'], ["4\n'", 'Key_Apostrophe'], ['5\n(', 'Key_LeftParenthesis'], ['6\n-', 'Key_Minus'], ['7\nè', 'Key_è'], ['8\n_', 'Key_Underline'], ['9\nç', 'Key_ç'], ['0\nà', 'Key_à'], ['°\n)', 'Key_RightParenthesis'], ['+\n=', 'Key_Equals'], {'w': 2}, 'Backspace',
+            {'x': 0.25}, 'Insert', 'Home', ['PgUp', 'Key_PageUp'], {'x': 0.25}, ['Num Lock', 'Key_NumLock'], ['/__N', 'Key_Numpad_Divide'], ['*__N', 'Key_Numpad_Multiply'], ['-__N', 'Key_Numpad_Subtract']],
+        [{'w': 1.5}, 'Tab', 'A', 'Z', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', ['¨\n^', 'Key_Circumflex'], ['£\n$', 'Key_Dollar'], {'x': 0.25, 'w': 1.25, 'h': 2, 'w2': 1.5, 'h2': 1, 'x2': -0.25}, 'Enter',
+            {'x': 0.25}, 'Delete', 'End', ['PgDn', 'Key_PageDown'], {'x': 0.25}, ['7__N\nHome__N', 'Key_Numpad_7'], ['8__N\n↑', 'Key_Numpad_8'], ['9__N\nPgUp__N', 'Key_Numpad_9'], {'h': 2}, ['+__N', 'Key_Numpad_Add']],
+        [{'w': 1.75}, ['Caps Lock', 'Key_CapsLock'], 'Q', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'M', ['%\nù', 'Key_ù'], ['µ\n*', 'Key_Asterisk'],
+            {'x': 4.75}, ['4__N\n←', 'Key_Numpad_4'], ['5__N', 'Key_Numpad_5'], ['6__N\n→', 'Key_Numpad_6']],
+        [{'w': 1.25}, ['Shift__L', 'Key_LeftShift'], ['>\n<', 'Key_LessThan'], 'W', 'X', 'C', 'V', 'B', 'N', ['?\n,', 'Key_Comma'], ['.\n;', 'Key_SemiColon'], ['/\n:', 'Key_Colon'], ['§\n!', 'Key_ExclamationPoint'], {'w': 2.75}, ['Shift__R', 'Key_RightShift'],
+            {'x': 1.25}, ['↑', 'Key_UpArrow'], {'x': 1.25}, ['1__N\nEnd__N', 'Key_Numpad_1'], ['2__N\n↓', 'Key_Numpad_2'], ['3__N\nPgDn__N', 'Key_Numpad_3'], {'h': 2}, ['Enter__N', 'Key_Numpad_Enter']],
+        [{'w': 1.25}, ['Ctrl__L', 'Key_LeftControl'], {'w': 1.25}, ['Win__L', 'Key_LeftWindows'], {'w': 1.25}, ['Alt__L', 'Key_LeftAlt'], {'a': 7, 'w': 6.25}, [' ', 'Key_Space'], {'a': 4, 'w': 1.25}, ['AltGr', 'Key_RightAlt'], {'w': 1.25}, ['Win__R', 'Key_RightWindows'], {'w': 1.25}, 'Menu', {'w': 1.25}, ['Ctrl__R', 'Key_RightControl'],
+            {'x': 0.25}, ['←', 'Key_LeftArrow'], ['↓', 'Key_DownArrow'], ['→', 'Key_RightArrow'], {'x': 0.25, 'w': 2}, ['0__N\nIns__N', 'Key_Numpad_0'], ['.__N\nDel__N', 'Key_Numpad_Decimal']],
+    ],
     'ЙЦУКЕН': [
         ['Esc', {'x': 1}, 'F1', 'F2', 'F3', 'F4', {'x': 0.5}, 'F5', 'F6', 'F7', 'F8', {'x': 0.5}, 'F9', 'F10', 'F11', 'F12', {'x': 0.25}, 'PrtSc', ['ScrLk', 'Key_ScrollLock'], ['Pause\nBreak', 'Key_Pause']],
         [{'y': 0.5}, ['Ё\n`', 'Key_Grave'], ['!\n1', 'Key_1'], ['"\n2', 'Key_2'], ['№\n3', 'Key_3'], ['4', 'Key_4'], ['%\n5', 'Key_5'], [':\n6', 'Key_6'], ['?\n7', 'Key_7'], ['*\n8', 'Key_8'], ['(\n9', 'Key_9'], [')\n0', 'Key_0'], ['_\n-', 'Key_Minus'], ['+\n=', 'Key_Equals'], {'w': 2}, 'Backspace',

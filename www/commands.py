@@ -248,3 +248,73 @@ def rebuild_db_command():
         utils.logError = original_log_error
             
     click.echo(f"Rebuild complete: {count} recovered, {errors_count} errors.")
+
+
+@click.command('seed-aeromax')
+@with_appcontext
+def seed_aeromax_command():
+    """Seed a controller_mapping for the VIRPIL CDT-AEROMAX R (334444B0). Test scaffolding."""
+    import json
+    from scripts import database
+
+    def r(symbol, number, joy, typ='Digital'):
+        return {'symbol': symbol, 'number': number, 'joy': joy, 'type': typ}
+
+    # Labels/numbers come from the VIRPIL CDT-AEROMAX R callout sheet (number == Joy_N
+    # in game). Positions are a provisional two-column layout with NO leader lines yet:
+    # exact button anchoring is done later from the manual + the click-to-place editor.
+    # The mini-thruster (U axis) is a floating box (no button_xy) because the module is
+    # removable (left/right/both). Empty boxes/rows are hidden per user at render time.
+    # Canvas: composed wide card 4400x2560 (stick centred ~1485-2915), so the two
+    # columns sit in the left/right margins. '-card' suffix avoids the stale square
+    # upscayl shadowing it from the controllers/ volume.
+    mapping = {
+        'title': 'VIRPIL CDT-AEROMAX R Flightstick',
+        'image': 'vpc-aeromax-r-card',
+        'device_ids': ['334444B0'],
+        'styling': 'Group',
+        'boxes': [
+            # --- left column (margin 0..1485) ---
+            {'label': 'FIRE', 'box_xy': [70, 200], 'box_wh': [1380, 184],
+             'rows': [r('stage1', '1', 'Joy_1'), r('stage2', '2', 'Joy_2')]},
+            {'label': 'CMS', 'box_xy': [70, 420], 'box_wh': [1380, 328],
+             'rows': [r('up', '8', 'Joy_8'), r('left', '11', 'Joy_11'),
+                      r('press', '7', 'Joy_7'), r('right', '9', 'Joy_9')]},
+            {'label': 'AP', 'box_xy': [70, 790], 'box_wh': [1380, 184],
+             'rows': [r('up', '3', 'Joy_3'), r('down', '4', 'Joy_4')]},
+            {'label': 'NWS / MSLS', 'box_xy': [70, 1010], 'box_wh': [1380, 112],
+             'rows': [r('press', '5', 'Joy_5')]},
+            {'label': 'GEAR', 'box_xy': [70, 1160], 'box_wh': [1380, 112],
+             'rows': [r('press', '25', 'Joy_25')]},
+            {'label': 'UI / FSS', 'box_xy': [70, 1310], 'box_wh': [1380, 112],
+             'rows': [r('press', '6', 'Joy_6')]},
+            # floating: removable mini-thruster module (no physical anchor)
+            {'label': 'MINI-THRUSTER', 'box_xy': [70, 1480], 'box_wh': [1000, 112],
+             'rows': [r(None, 'U', 'Joy_UAxis', 'Analogue')]},
+            # --- right column (margin 2915..4400) ---
+            {'label': 'VIEW / TRIM', 'box_xy': [2950, 200], 'box_wh': [1380, 400],
+             'rows': [r('up', '27', 'Joy_27'), r('right', '28', 'Joy_28'),
+                      r('down', '29', 'Joy_29'), r('left', '30', 'Joy_30'),
+                      r('right', '16', 'Joy_16')]},
+            {'label': 'POV1', 'box_xy': [2950, 640], 'box_wh': [1380, 328],
+             'rows': [r('up', None, 'Joy_POV1Up'), r('right', None, 'Joy_POV1Right'),
+                      r('down', None, 'Joy_POV1Down'), r('left', None, 'Joy_POV1Left')]},
+            {'label': 'STICK', 'box_xy': [2950, 1010], 'box_wh': [1380, 184],
+             'rows': [r(None, 'X', 'Joy_XAxis', 'Analogue'), r(None, 'Y', 'Joy_YAxis', 'Analogue')]},
+            {'label': 'RUDDER (twist)', 'box_xy': [2950, 1230], 'box_wh': [1380, 112],
+             'rows': [r(None, 'Z', 'Joy_ZAxis', 'Analogue')]},
+            {'label': 'WHEEL BRAKE', 'box_xy': [2950, 1380], 'box_wh': [1380, 112],
+             'rows': [r(None, 'RZ', 'Joy_RZAxis', 'Analogue')]},
+        ],
+    }
+    mj = json.dumps(mapping)
+    existing = database.get_controller_mapping_by_device_id('334444B0')
+    if existing:
+        database.update_controller_mapping(existing['id'], device_name=mapping['title'],
+                                           template_name=mapping['image'],
+                                           image_filename=mapping['image'] + '.jpg', mapping_json=mj)
+        click.echo(f"Updated AEROMAX mapping id {existing['id']}")
+    else:
+        mid = database.create_controller_mapping('334444B0', mapping['title'], mapping['image'],
+                                                 mapping['image'] + '.jpg', 4400, 2560, mj)
+        click.echo(f"Created AEROMAX mapping id {mid}")

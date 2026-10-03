@@ -1,0 +1,64 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Users{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>👥 Users</h1>
+    <p>Named accounts for the admin panel. Role <span class="badge badge-warning">admin</span> = full panel;
+       <span class="badge badge-success">mapper</span> = Controllers + Mapping Editor only.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Create user</h2></div>
+    <form method="post" action="{{ url_for('admin.users_create') }}" class="search-form">
+        <input type="text" name="username" placeholder="username (3-32, a-z 0-9 _.-)" required style="max-width:220px">
+        <input type="text" name="password" placeholder="password (8+ chars)" required style="max-width:220px">
+        <select name="role" style="width:auto">
+            <option value="mapper" selected>mapper</option>
+            <option value="admin">admin</option>
+        </select>
+        <button class="btn btn-primary" type="submit">Create</button>
+    </form>
+    <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:0">
+        Share the credentials with the mapper privately; they sign in at <code>/admin/login</code>.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Accounts ({{ users|length }})</h2></div>
+    {% if users %}
+    <table>
+        <thead>
+            <tr><th>Username</th><th>Role</th><th>Created</th><th>Last login</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td>{{ u.username }}</td>
+                <td><span class="badge {{ 'badge-warning' if u.role == 'admin' else 'badge-success' }}">{{ u.role }}</span></td>
+                <td>{{ u.created_at }}</td>
+                <td>{{ u.last_login or 'never' }}</td>
+                <td>
+                    <div class="actions">
+                        <form method="post" action="{{ url_for('admin.users_reset') }}" style="display:flex;gap:0.25rem">
+                            <input type="hidden" name="user_id" value="{{ u.id }}">
+                            <input type="text" name="password" placeholder="new password"
+                                   style="width:150px;padding:0.25rem 0.5rem;font-size:0.8rem" required>
+                            <button class="btn btn-outline btn-sm" type="submit">Reset</button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin.users_delete') }}"
+                              onsubmit="return confirm('Delete user {{ u.username }}?')">
+                            <input type="hidden" name="user_id" value="{{ u.id }}">
+                            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-secondary)">No named accounts yet (you are using the env admin).</p>
+    {% endif %}
+</div>
+{% endblock %}

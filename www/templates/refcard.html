@@ -36,6 +36,13 @@
         </div>
         {% endif %}
 
+        {% if unlisted %}
+        <div class="alert alert-info">
+            🔒 <strong>Unlisted card</strong>: it will not appear in the public catalogue.
+            Only people with the link can view it, so keep the URL below if you want to find it again.
+        </div>
+        {% endif %}
+
         {% if unsupported_devices %}
         <div class="alert alert-warning">
             <p><strong>Unsupported Controller(s) Detected:</strong></p>
@@ -51,7 +58,7 @@
         {% endif %}
 
 
-        {% if created_images or device_for_block_image %}
+        {% if created_images or data_driven_images or device_for_block_image %}
         {% for image in created_images %}
         {% if '::' in image %}
         {% set parts = image.split('::') %}
@@ -73,6 +80,14 @@
         {% endif %}
         {% endfor %}
 
+        {% if data_driven_images %}
+        {% for base in data_driven_images %}
+        <img class="refcard-image lightbox-trigger"
+            src="{{ url_for('web.serve_config', path=run_id[:2] + '/' + run_id + '-' + base + '.jpg') }}"
+            alt="Controller Reference Card" />
+        {% endfor %}
+        {% endif %}
+
         {% if keyboard_layout_image %}
         <img class="refcard-image lightbox-trigger"
             src="{{ url_for('web.serve_config', path=run_id[:2] + '/' + run_id + '-keyboard-layout.jpg') }}"
@@ -88,8 +103,21 @@
         {% endif %}
         {# End of created_images/device_for_block_image section #}
 
-        {# Share section - shown for all configs with a run_id, regardless of images #}
-        {% if run_id and not device_for_block_image %}
+        {# Share section - only when at least one card was actually generated
+           (sharing links / PDF / QR for a card that does not exist confused
+           unknown-controller uploaders) #}
+        {% if run_id and not device_for_block_image and not (created_images or data_driven_images or keyboard_layout_image) %}
+        <div class="form-section tools-section" style="margin-top: 2rem;">
+            <h3>🔗 Tools</h3>
+            <p class="text-muted">No reference card could be generated for this file yet,
+                so the sharing and PDF tools are unavailable. You can still retrieve your file:</p>
+            <a href="{{ binds_url }}" class="btn-secondary" download>
+                💾 Download .binds
+            </a>
+        </div>
+        {% endif %}
+
+        {% if run_id and not device_for_block_image and (created_images or data_driven_images or keyboard_layout_image) %}
         <div class="form-section tools-section" style="margin-top: 2rem;">
             <h3>🔗 Export & Tools</h3>
 

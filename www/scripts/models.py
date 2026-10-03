@@ -8,7 +8,6 @@ This module contains the core data models and configuration classes.
 import os
 import string
 import random
-import pickle
 from enum import Enum
 from pathlib import Path
 from urllib.parse import urljoin
@@ -133,8 +132,14 @@ class Config:
         return self.path().with_suffix(suffix)
         
     def exists(self):
-        """Check if this config already exists on disk."""
-        return self.path().exists()
+        """Check if this config already exists on disk.
+
+        The bare base path is never created (only suffixed files like
+        <id>.binds are), so probe the .binds file too: otherwise same-named
+        uploads silently reuse the run id, overwrite the previous config and
+        the browser serves stale cached card images.
+        """
+        return self.path().exists() or self.pathWithSuffix('.binds').exists()
         
     def makeDir(self):
         """Create the directory structure for this config."""
@@ -151,40 +156,6 @@ class Config:
         """Get the URL to download the binds file."""
         url = urljoin(Config.webRoot(), "configs/%s.binds" % self.name)
         return url
-
-    @staticmethod
-    def unpickle(path):
-        """Load a pickled config object from a file.
-        
-        Args:
-            path: Path to the .replay file
-            
-        Returns:
-            Dictionary with config data including runID
-        """
-        with path.open('rb') as file:
-            obj = pickle.load(file)
-            obj['runID'] = path.stem
-        return obj
-            
-    @staticmethod
-    def allConfigs(sortKey=None):
-        """Get all saved configurations.
-        
-        Args:
-            sortKey: Optional function to sort the configs
-            
-        Returns:
-            List of config dictionaries
-        """
-        configsPath = Config.configsPath()
-        if not configsPath.exists():
-            return []
-        picklePaths = list(configsPath.glob('**/*.replay'))
-        objs = [Config.unpickle(path) for path in picklePaths]
-        if sortKey is not None:
-            objs.sort(key=sortKey)
-        return objs
 
 
 class Mode(Enum):

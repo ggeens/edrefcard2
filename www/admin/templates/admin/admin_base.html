@@ -398,13 +398,21 @@
                 class="nav-item {% if request.endpoint == 'admin.list_configs' %}active{% endif %}">
                 <span>📋</span> Configurations
             </a>
-            <a href="{{ url_for('admin.list_devices') }}"
-                class="nav-item {% if request.endpoint == 'admin.list_devices' %}active{% endif %}">
-                <span>🎮</span> Devices
-            </a>
             <a href="{{ url_for('admin.batch_import') }}"
                 class="nav-item {% if request.endpoint == 'admin.batch_import' %}active{% endif %}">
                 <span>📤</span> Batch Import
+            </a>
+            <a href="{{ url_for('admin.controllers') }}"
+                class="nav-item {% if request.endpoint == 'admin.controllers' %}active{% endif %}">
+                <span>🎛️</span> Controllers
+            </a>
+            <a href="{{ url_for('admin.mapping_editor') }}"
+                class="nav-item {% if request.endpoint == 'admin.mapping_editor' %}active{% endif %}">
+                <span>🗺️</span> Mapping Editor
+            </a>
+            <a href="{{ url_for('admin.mapper_help') }}"
+                class="nav-item {% if request.endpoint == 'admin.mapper_help' %}active{% endif %}">
+                <span>📖</span> Mapper Guide
             </a>
 
             <hr style="border-color: var(--border-color); margin: 1rem 0;">
@@ -424,9 +432,18 @@
 
             <hr style="border-color: var(--border-color); margin: 1rem 0;">
 
+            <a href="{{ url_for('admin.users') }}"
+                class="nav-item {% if request.endpoint == 'admin.users' %}active{% endif %}">
+                <span>👥</span> Users
+            </a>
             <a href="/" class="nav-item">
                 <span>🏠</span> Back to Site
             </a>
+            <form method="post" action="{{ url_for('admin.logout') }}" style="margin:0">
+                <button type="submit" class="nav-item" style="width:100%;text-align:left;background:none;border:none;border-left:3px solid transparent;cursor:pointer;font:inherit">
+                    <span>🚪</span> Logout
+                </button>
+            </form>
         </nav>
 
         <main class="main-content">

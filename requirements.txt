@@ -12,6 +12,7 @@ mypy
 types-Flask
 types-requests
 fpdf2
+PyMuPDF>=1.24  # manufacturer AcroForm sheet import (scripts/pdf_import.py)
 
 # Backup system dependencies
 paramiko>=3.4.0

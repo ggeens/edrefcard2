@@ -1,0 +1,61 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Mapping history - {{ mapping.device_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🕘 History: {{ mapping.device_name }}</h1>
+    <p>Every editor save records a version here (the 20 most recent are kept).
+       <strong>Rollback</strong> restores that state as a draft, leaving the public revision unchanged, without deleting
+       anything: the restore itself becomes a new version, so a rollback can be rolled back.</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Versions ({{ versions|length }})</h2>
+        <a class="btn btn-outline btn-sm" href="{{ url_for('admin.controllers') }}">&larr; Controllers</a>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('admin.mapping_editor', device=mapping.device_id) }}">Open in editor</a>
+    </div>
+    {% if versions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Version</th>
+                <th>Saved at</th>
+                <th>By</th>
+                <th>Size</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for v in versions %}
+            <tr>
+                <td>#{{ v.id }}{% if loop.first %} <span class="badge badge-success" title="This is the mapping as it is right now">current</span>{% endif %}</td>
+                <td>{{ v.saved_at }}</td>
+                <td>{{ v.saved_by or '?' }}</td>
+                <td>{{ (v.json_size / 1024)|round(1) }} kB</td>
+                <td>
+                    <div class="actions">
+                        <a class="btn btn-outline btn-sm" target="_blank" rel="noopener"
+                           href="{{ url_for('admin.controllers_history_json', mapping_id=mapping.id, version_id=v.id) }}"
+                           title="Raw mapping_json (open in a new tab; importable in the editor via Import JSON)">JSON</a>
+                        {% if role == 'admin' and not loop.first %}
+                        <form method="post" action="{{ url_for('admin.controllers_rollback') }}"
+                              onsubmit="return confirm('Restore &quot;{{ mapping.device_name }}&quot; to version #{{ v.id }} of {{ v.saved_at }}?')">
+                            <input type="hidden" name="version_id" value="{{ v.id }}">
+                            <input type="hidden" name="base_updated_at" value="{{ mapping.updated_at }}">
+                            <button class="btn btn-outline btn-sm" type="submit"
+                                    title="Restore this version as a draft">Rollback to draft</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-secondary)">No versions recorded yet: they appear from the next editor save.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -27,7 +27,7 @@ from scripts import database  # noqa: E402
 
 
 from extensions import limiter  # noqa: E402
-from commands import clean_cache_command, find_unsupported_command, import_defaults_command, rebuild_db_command  # noqa: E402
+from commands import clean_cache_command, find_unsupported_command, import_defaults_command, rebuild_db_command, seed_aeromax_command  # noqa: E402
 from flask_limiter.errors import RateLimitExceeded  # noqa: E402
 
 
@@ -44,6 +44,10 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB max upload
 app.config['CONFIGS_FOLDER'] = WWW_DIR / 'configs'
 app.config['WWW_DIR'] = WWW_DIR
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+# Session cookie hardening (session auth for admin/mapper accounts)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('APP_URL', '').startswith('https')
 
 # Configure the bindings Config class for Flask
 Config.setDirRoot(WWW_DIR)
@@ -100,6 +104,7 @@ app.cli.add_command(clean_cache_command)
 app.cli.add_command(find_unsupported_command)
 app.cli.add_command(import_defaults_command)
 app.cli.add_command(rebuild_db_command)
+app.cli.add_command(seed_aeromax_command)
 
 
 # =============================================================================

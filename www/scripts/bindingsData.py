@@ -59,7 +59,6 @@ supportedDevices = OrderedDict([
     ('VPC-MongoosT-50CM2-Throttle', {'Template': 'vpc-mongoost-50cm2-throttle', 'HandledDevices': ['33448195']}),
     ('VPC-MongoosT-50CM3-Throttle', {'Template': 'vpc-mongoost-50cm3-throttle', 'HandledDevices': ['33448197','33440197','33448198','VPCThrottle']}),
     ('VPC-MongoosT-50CM3-Throttle-32B', {'Template': 'vpc-mongoost-50cm3-throttle-32b', 'KeyDevices': ['VPC-MongoosT-50CM3-Throttle-32B0', 'VPC-MongoosT-50CM3-Throttle-32B1', 'VPC-MongoosT-50CM3-Throttle-32B2'], 'HandledDevices': ['VPC-MongoosT-50CM3-Throttle-32B0', 'VPC-MongoosT-50CM3-Throttle-32B1', 'VPC-MongoosT-50CM3-Throttle-32B2']}),
-    ('VPC-MongoosT-50CM3-Throttle-32B-No-Shift', {'Template': 'vpc-mongoost-50cm3-throttle-32b-no-shift', 'KeyDevices': ['VPC-MongoosT-50CM3-Throttle-32B-NS0', 'VPC-MongoosT-50CM3-Throttle-32B-NS1'], 'HandledDevices': ['VPC-MongoosT-50CM3-Throttle-32B-NS0', 'VPC-MongoosT-50CM3-Throttle-32B-NS1']}),
     ('VPC-Control-Panel-2', {'Template': 'vpc-controlpanel2', 'HandledDevices': ['3344825A']}),
     ('VKB-Kosmosima-SCG-Left', {'Template': 'vkb-kosmosima-scg-left', 'HandledDevices': ['231D0127']}),
     ('VKB-Kosmosima-SCG-Right', {'Template': 'vkb-kosmosima-scg-right', 'HandledDevices': ['231D0126']}),
@@ -76,28 +75,25 @@ supportedDevices = OrderedDict([
     # ==== COMMUNITY-DISCOVERED CONTROLLERS (Placeholders) ====
     # Found via analysis of 100 random configurations from edrefcard.info (2794 total)
     # These prevent "Unknown controller detected" warnings but have no visual layouts yet
-    ('VKB-STECS-VC', {'Template': 'vkb-stecs', 'HandledDevices': ['231D012C']}),
-    ('VKB-Device-13A', {'Template': 'vkb-13a', 'HandledDevices': ['231D013A']}),
-    ('VKB-Device-137', {'Template': 'vkb-137', 'HandledDevices': ['231D0137']}),
-    ('VKB-Device-11F', {'Template': 'vkb-11f', 'HandledDevices': ['231D011F']}),
-    ('VPC-Device-812F', {'Template': 'vpc-812f', 'HandledDevices': ['3344812F']}),
-    ('Winwing-Orion2-Extra', {'Template': 'winwing-orion2-extra', 'HandledDevices': ['4098BD64']}),
-    ('ThrustMaster-Device-B67F', {'Template': 'tm-b67f', 'HandledDevices': ['044FB67F']}),
-    ('ThrustMaster-TCA-Boeing', {'Template': 'tm-tca-boeing', 'HandledDevices': ['044F0412']}),
-    ('ThrustMaster-TWCS-Throttle', {'Template': 'twcs-throttle', 'HandledDevices': ['TWCS']}),
-    ('Logitech-Device-C262', {'Template': 'logitech-c262', 'HandledDevices': ['046DC262']}),
-    ('Logitech-Device-C2AB', {'Template': 'logitech-c2ab', 'HandledDevices': ['046DC2AB']}),
-    ('Logitech-Device-C29B', {'Template': 'logitech-c29b', 'HandledDevices': ['046DC29B']}),
-    ('XBox-Elite-Variant-B00', {'Template': 'xbox-elite-b00', 'HandledDevices': ['045E0B00']}),
-    ('XBox-Controller-B12', {'Template': 'xbox-b12', 'HandledDevices': ['045E0B12']}),
-    ('HORI-Device-18E', {'Template': 'hori-18e', 'HandledDevices': ['0F0D018E']}),
-    ('HORI-Device-18F', {'Template': 'hori-18f', 'HandledDevices': ['0F0D018F']}),
-    ('DragonRise-189C', {'Template': 'dragonrise-189c', 'HandledDevices': ['0079189C']}),
-    ('DragonRise-0006', {'Template': 'dragonrise-0006', 'HandledDevices': ['00790006']}),
-    ('Unknown-Device-5758', {'Template': 'unknown-5758', 'HandledDevices': ['04835758']}),
-    ('Unknown-Device-B7', {'Template': 'unknown-b7', 'HandledDevices': ['2F2400B7']}),
     ('Keyboard', {'Template': 'keyboard', 'HandledDevices': ['Keyboard']})
 ])
+
+
+def apply_legacy_device_aliases(aliases):
+    """Add reviewed runtime hardware aliases to the legacy device registry.
+
+    The database owns the alias list. This function only updates the in-memory
+    registry used by the current worker and is safe to call repeatedly.
+    """
+    for alias in aliases or []:
+        device_id = str(alias.get('device_id') or '').strip()
+        legacy_key = str(alias.get('legacy_key') or '').strip()
+        target = supportedDevices.get(legacy_key)
+        if not device_id or target is None:
+            continue
+        for field in ('HandledDevices', 'KeyDevices'):
+            if field in target and device_id not in target[field]:
+                target[field].append(device_id)
 
 #controls went in here!
 
@@ -254,31 +250,38 @@ hotasDetails = {
         'Joy_UAxis': {'Type': 'Analogue', 'x': 1874, 'y': 1914, 'width': 832}, # Pinky dial
         'Joy_RZAxis': {'Type': 'Analogue', 'x': 1954, 'y': 2054, 'width': 832}, # Paddle
     },
+    # Left-handed variant: coordinates are the horizontal mirror of the right-handed
+    # 044F0406 block (x' = 3840 - x - width) to match the left-handed template image
+    # tca-left.jpg and the manual's left-handed callout (panel 4). See 044F0406 below.
     '044F0405': {
-        'Joy_1': {'Type': 'Digital', 'x': 2124, 'y': 494, 'width': 1092}, # Primary trigger
-        'Joy_2': {'Type': 'Digital', 'x': 474, 'y': 494, 'width': 1092}, # Back button
-        'Joy_3': {'Type': 'Digital', 'x': 474, 'y': 624, 'width': 1092}, # Left-hand button
-        'Joy_4': {'Type': 'Digital', 'x': 2124, 'y': 624, 'width': 1092}, # Right-hand button
-        'Joy_5': {'Type': 'Digital', 'x': 24, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-left button
-        'Joy_6': {'Type': 'Digital', 'x': 574, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-middle button
-        'Joy_7': {'Type': 'Digital', 'x': 1124, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-right button
-        'Joy_8': {'Type': 'Digital', 'x': 1124, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-right button
-        'Joy_9': {'Type': 'Digital', 'x': 574, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-middle button
-        'Joy_10': {'Type': 'Digital', 'x': 24, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-left button
-        'Joy_11': {'Type': 'Digital', 'x': 3264, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-right button
-        'Joy_12': {'Type': 'Digital', 'x': 2714, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-middle button
-        'Joy_13': {'Type': 'Digital', 'x': 2164, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-left button
-        'Joy_14': {'Type': 'Digital', 'x': 2164, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-left button
-        'Joy_15': {'Type': 'Digital', 'x': 2714, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-middle button
-        'Joy_16': {'Type': 'Digital', 'x': 3264, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-right button
-        'Joy_POV1Up': {'Type': 'Digital', 'x': 1542, 'y': 214, 'width': 1532}, # PoV hat up
-        'Joy_POV1Right': {'Type': 'Digital', 'x': 1542, 'y': 270, 'width': 1532}, # PoV hat right
-        'Joy_POV1Down': {'Type': 'Digital', 'x': 1542, 'y': 326, 'width': 1532}, # PoV hat down
-        'Joy_POV1Left': {'Type': 'Digital', 'x': 1542, 'y': 382, 'width': 1532}, # PoV hat left
-        'Joy_RZAxis': {'Type': 'Analogue', 'x': 2357, 'y': 980, 'width': 1132}, # Stick twist
-        'Joy_UAxis': {'Type': 'Analogue', 'x': 2584, 'y': 1750, 'width': 832}, # Stick throttle slider
-        'Joy_XAxis': {'Type': 'Analogue', 'x': 2357, 'y': 924, 'width': 1132}, # Stick pitch
-        'Joy_YAxis': {'Type': 'Analogue', 'x': 2357, 'y': 868, 'width': 1132}, # Stick roll
+        'Joy_1': {'Type': 'Digital', 'x': 624, 'y': 494, 'width': 1092}, # Primary trigger
+        'Joy_2': {'Type': 'Digital', 'x': 2274, 'y': 494, 'width': 1092}, # Back button
+        # Buttons 3/4 keep the SAME numbers as the right-hand variant (the red/black
+        # caps swap sides physically but the numbering does not follow the mirror)
+        # - confirmed on hardware by BiscuitMx (forum, post 10849246).
+        'Joy_3': {'Type': 'Digital', 'x': 624, 'y': 624, 'width': 1092}, # Left-hand button
+        'Joy_4': {'Type': 'Digital', 'x': 2274, 'y': 624, 'width': 1092}, # Right-hand button
+        'Joy_5': {'Type': 'Digital', 'x': 3274, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-right button
+        'Joy_6': {'Type': 'Digital', 'x': 2724, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-middle button
+        'Joy_7': {'Type': 'Digital', 'x': 2174, 'y': 1104, 'width': 542, 'height': 108}, # Right bank top-left button
+        'Joy_8': {'Type': 'Digital', 'x': 2174, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-left button
+        'Joy_9': {'Type': 'Digital', 'x': 2724, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-middle button
+        'Joy_10': {'Type': 'Digital', 'x': 3274, 'y': 1220, 'width': 542, 'height': 108}, # Right bank bottom-right button
+        'Joy_11': {'Type': 'Digital', 'x': 34, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-left button
+        'Joy_12': {'Type': 'Digital', 'x': 584, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-middle button
+        'Joy_13': {'Type': 'Digital', 'x': 1134, 'y': 1104, 'width': 542, 'height': 108}, # Left bank top-right button
+        'Joy_14': {'Type': 'Digital', 'x': 1134, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-right button
+        'Joy_15': {'Type': 'Digital', 'x': 584, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-middle button
+        'Joy_16': {'Type': 'Digital', 'x': 34, 'y': 1220, 'width': 542, 'height': 108}, # Left bank bottom-left button
+        'Joy_POV1Up': {'Type': 'Digital', 'x': 766, 'y': 214, 'width': 1532}, # PoV hat up
+        'Joy_POV1Right': {'Type': 'Digital', 'x': 766, 'y': 270, 'width': 1532}, # PoV hat right
+        'Joy_POV1Down': {'Type': 'Digital', 'x': 766, 'y': 326, 'width': 1532}, # PoV hat down
+        'Joy_POV1Left': {'Type': 'Digital', 'x': 766, 'y': 382, 'width': 1532}, # PoV hat left
+        'Joy_RZAxis': {'Type': 'Analogue', 'x': 351, 'y': 980, 'width': 1132}, # Stick twist
+        'Joy_UAxis': {'Type': 'Analogue', 'x': 424, 'y': 1750, 'width': 832}, # Stick throttle slider
+        'Joy_17': {'Type': 'Digital', 'x': 424, 'y': 1806, 'width': 832}, # Virtual button: throttle slider pushed fully down
+        'Joy_XAxis': {'Type': 'Analogue', 'x': 351, 'y': 924, 'width': 1132}, # Stick pitch
+        'Joy_YAxis': {'Type': 'Analogue', 'x': 351, 'y': 868, 'width': 1132}, # Stick roll
     },
     '044F0406': {
         'Joy_1': {'Type': 'Digital', 'x': 2124, 'y': 494, 'width': 1092}, # Primary trigger
@@ -303,9 +306,10 @@ hotasDetails = {
         'Joy_POV1Left': {'Type': 'Digital', 'x': 1542, 'y': 382, 'width': 1532}, # PoV hat left
         'Joy_RZAxis': {'Type': 'Analogue', 'x': 2357, 'y': 980, 'width': 1132}, # Stick twist
         'Joy_UAxis': {'Type': 'Analogue', 'x': 2584, 'y': 1750, 'width': 832}, # Stick throttle slider
+        'Joy_17': {'Type': 'Digital', 'x': 2584, 'y': 1806, 'width': 832}, # Virtual button: throttle slider pushed fully down
         'Joy_XAxis': {'Type': 'Analogue', 'x': 2357, 'y': 924, 'width': 1132}, # Stick pitch
         'Joy_YAxis': {'Type': 'Analogue', 'x': 2357, 'y': 868, 'width': 1132}, # Stick roll
-    },    
+    },
     'SaitekFLY5': {
         'Joy_1': {'Type': 'Digital', 'x': 684, 'y': 794, 'width': 1092}, # Primary trigger
         'Joy_2': {'Type': 'Digital', 'x': 734, 'y': 874, 'width': 1092}, # Bottom-left button

@@ -53,19 +53,29 @@ def _init_styles():
         _styles_initialized = True
 
 
-def writeUrlToDrawing(config, drawing, public):
+# Templates whose default top-left URL spot is occupied by artwork and need the URL
+# elsewhere. The mirrored left-handed TCA sidestick has a wide central box that sits
+# under the default position, so the URL goes to the clear bottom-left instead.
+_URL_POSITION_OVERRIDES = {
+    'tca-left': (30, 2110),
+}
+
+
+def writeUrlToDrawing(config, drawing, public, source=None):
     """Write the reference card URL to the image.
-    
+
     Args:
         config: Config object
         drawing: Wand Drawing context
         public: Whether this is a public reference card
+        source: Template name, used to look up a per-template URL position override
     """
     url = config.refcardURL() if public else Config.webRoot()
+    x, y = _URL_POSITION_OVERRIDES.get(source, (23, 252))
     drawing.push()
     drawing.font = getFontPath('SemiBold', 'Normal')
     drawing.font_size = 36
-    drawing.text(x=23, y=252, body=url)
+    drawing.text(x=x, y=y, body=url)
     drawing.pop()
 
 
@@ -108,7 +118,7 @@ def createKeyboardImage(physicalKeys, modifiers, source, imageDevices,
             context.fill_color = Color('Black')
 
             # Add URL to title
-            writeUrlToDrawing(config, context, public)
+            writeUrlToDrawing(config, context, public, source)
 
             # Organize outputs by group
             outputs = {group: {} for group in displayGroups}
@@ -924,7 +934,7 @@ def createHOTASImage(physicalKeys, modifiers, source, imageDevices, biggestFontS
             context.fill_opacity = 1
 
             # Add URL to title
-            writeUrlToDrawing(config, context, public)
+            writeUrlToDrawing(config, context, public, source)
 
             for physicalKeySpec, physicalKey in physicalKeys.items():
                 itemDevice = physicalKey.get('Device')
@@ -1264,3 +1274,288 @@ def calculateBestFontSize(context, text, hotasDetail, biggestFontSize):
                         fontSize = fontSize - 1
 
     return (fitText, fontSize, metrics)
+
+
+# ============== Data-driven controller rendering (feature B1) ==============
+# Renders a card by DRAWING the chrome (box frame, leader line, group header,
+# per-row symbol + number) from a mapping_json structure, on top of a CLEAN
+# controller image - instead of relying on an artwork baked into the template.
+# Legacy createHOTASImage is unchanged. Binding text rendering is reused from
+# layoutText (added in a later step).
+
+_LEADER_COLOR = '#962320'
+
+
+# Legacy EdRefCard uses TEXT glyphs in the symbol column (matches the reference
+# cards), not drawn shapes: ^ > v < 0 for hat up/right/down/left/press, and words
+# for trigger stages / levers.
+_SYMBOL_GLYPHS = {
+    'press': '0', 'up': '^', 'right': '>', 'down': 'v', 'left': '<',
+    'stage1': 'stage 1', 'stage2': 'stage 2', 'push': 'push', 'pull': 'pull',
+}
+
+
+def _symbolColumnWidth(symbol):
+    """Width reserved for the symbol column (wider for word glyphs like 'stage 1')."""
+    g = _SYMBOL_GLYPHS.get(symbol or '', '')
+    if not g:
+        return 0
+    return 150 if len(g) > 2 else 44
+
+
+def _drawControlSymbol(context, x, y_center, symbol):
+    """Render the legacy text glyph for a control, vertically centred on y_center."""
+    g = _SYMBOL_GLYPHS.get(symbol or '')
+    if not g:
+        return
+    context.push()
+    context.stroke_color = Color('transparent')
+    context.fill_color = Color('#333333')
+    context.font = getFontPath('Bold', 'Normal')
+    context.font_size = 28
+    context.text(x=int(x), y=int(y_center + 10), body=g)
+    context.pop()
+
+
+def _drawDataDrivenBox(context, sourceImg, box, biggestFontSize=40, styling='Group'):
+    """Draw one box: leader line, header label, frame, per-row symbol + number + binding text.
+
+    Boxes with no_chrome=True (imported from a manufacturer AcroForm sheet
+    whose artwork already contains frames, badges and leader lines) only get
+    their row content written, no chrome drawn on top."""
+    x, y = box['box_xy']
+    w, h = box['box_wh']
+    rows = box.get('rows', [])
+    chrome = not box.get('no_chrome')
+    header_h = 40 if (box.get('label') and chrome) else 0
+
+    # Leader line (orthogonal elbow) from the box side facing the button to the button point
+    btn = box.get('button_xy') if chrome else None
+    if btn:
+        bx, by = btn
+        context.push()
+        context.stroke_color = Color(_LEADER_COLOR)
+        context.stroke_width = 3
+        context.fill_color = Color('transparent')
+        sx = x + w if bx >= x + w else x
+        sy = y + h / 2
+        midx = (sx + bx) / 2
+        context.line((sx, sy), (midx, sy))
+        context.line((midx, sy), (midx, by))
+        context.line((midx, by), (bx, by))
+        context.pop()
+
+    # Header bar + label
+    if header_h:
+        context.push()
+        context.stroke_color = Color('transparent')
+        context.fill_color = Color('#cfcfcf')
+        context.rectangle(left=x, top=y, width=w, height=header_h)
+        context.fill_color = Color('Black')
+        context.font = getFontPath('Bold', 'Normal')
+        context.font_size = 26
+        m = context.get_font_metrics(sourceImg, box['label'], multiline=False)
+        context.text(x=int(x + (w - m.text_width) / 2), y=int(y + header_h - 12), body=box['label'])
+        context.pop()
+
+    # Outer frame
+    if chrome:
+        context.push()
+        context.stroke_color = Color('Black')
+        context.stroke_width = 2
+        context.fill_color = Color('transparent')
+        context.rectangle(left=x, top=y, width=w, height=h)
+        context.pop()
+
+    # Per-row symbol + number gutters (+ light separators)
+    rows_top = y + header_h
+    rows_h = h - header_h
+    n = max(len(rows), 1)
+    row_h = rows_h / n
+    for i, row in enumerate(rows):
+        ry = rows_top + i * row_h
+        row_cy = ry + row_h / 2
+        if i > 0 and chrome:
+            context.push()
+            context.stroke_color = Color('#dddddd')
+            context.stroke_width = 1
+            context.line((x + 1, ry), (x + w - 1, ry))
+            context.pop()
+        # Column layout: [symbol glyph][number][binding text]
+        sym_w = _symbolColumnWidth(row.get('symbol'))
+        if sym_w:
+            _drawControlSymbol(context, x + 16, row_cy, row['symbol'])
+        col_x = x + 16 + sym_w
+        if row.get('number') is not None:
+            context.push()
+            context.stroke_color = Color('transparent')
+            context.fill_color = Color('#555555')
+            context.font = getFontPath('Bold', 'Normal')
+            context.font_size = 24
+            context.text(x=int(col_x), y=int(row_cy + 8), body=str(row['number']))
+            context.pop()
+            col_x += 56
+        # Binding text (pre-resolved by createDataDrivenImage), reusing layoutText fitting
+        texts = row.get('_texts') or []
+        if texts:
+            tx = col_x + 10
+            rect = {'x': int(tx), 'y': int(ry + 6),
+                    'width': int(x + w - tx - 14), 'height': int(row_h - 12)}
+            laid = layoutText(sourceImg, context, texts, rect, biggestFontSize)
+            for t in laid:
+                context.push()
+                context.stroke_color = Color('transparent')
+                context.font_size = t['Size']
+                context.font = t['Style']['Font']
+                context.fill_color = t['Style']['Color']
+                context.text(x=t['X'], y=t['Y'], body=t['Text'])
+                context.pop()
+
+
+def _buildJoyTexts(deviceIds, joyKey, deviceIndex, physicalKeys, modifiers, styling):
+    """Build the coloured texts list for one Joy_* key from the uploaded bindings.
+
+    Mirrors createHOTASImage's per-key logic so a data-driven card shows the user's
+    REAL bindings (not the mapping's sample binds). Returns [{Text, Group, Style}].
+    """
+    texts = []
+    pk = None
+    pkspec = None
+    for spec, k in physicalKeys.items():
+        if (k.get('Key') == joyKey and int(k.get('DeviceIndex', 0)) == deviceIndex
+                and k.get('Device') in deviceIds):
+            pk = k
+            pkspec = spec
+            break
+    if pk is None:
+        return texts
+
+    for keyModifier in modifiers.get(pkspec, []):
+        style = ModifierStyles.index(keyModifier.get('Number')) if styling == 'Modifier' else groupStyles.get('Modifier')
+        texts.append({'Text': 'Modifier %s' % keyModifier.get('Number'), 'Group': 'Modifier', 'Style': style})
+
+    # Unmodified bindings
+    for modifier, bind in pk.get('Binds', {}).items():
+        if modifier != 'Unmodified':
+            continue
+        for _ck, control in bind.get('Controls', {}).items():
+            if isRedundantSpecialisation(control, bind):
+                continue
+            if styling == 'Modifier':
+                style = ModifierStyles.index(0)
+            elif styling == 'Category':
+                style = categoryStyles.get(control.get('Category', 'General'))
+            else:
+                style = groupStyles.get(control.get('Group'))
+            texts.append({'Text': control.get('Name'), 'Group': control.get('Group'), 'Style': style})
+
+    # Modified bindings, in modifier-number order
+    for curMod in range(1, 200):
+        for modifier, bind in pk.get('Binds', {}).items():
+            if modifier == 'Unmodified':
+                continue
+            mnum = 0
+            for km in modifiers.get(modifier, []):
+                if km['ModifierKey'] == modifier:
+                    mnum = km['Number']
+                    break
+            if mnum != curMod:
+                continue
+            for _ck, control in bind.get('Controls', {}).items():
+                if isRedundantSpecialisation(control, bind):
+                    continue
+                if styling == 'Modifier':
+                    style = ModifierStyles.index(curMod)
+                    txt = control.get('Name')
+                elif styling == 'Category':
+                    style = categoryStyles.get(control.get('Category', 'General'))
+                    txt = '%s[%s]' % (control.get('Name'), curMod)
+                else:
+                    style = groupStyles.get(control.get('Group'))
+                    txt = '%s[%s]' % (control.get('Name'), curMod)
+                texts.append({'Text': txt, 'Group': control.get('Group'), 'Style': style})
+    return texts
+
+
+def createDataDrivenImage(mapping, config, public, physicalKeys=None, modifiers=None,
+                          styling=None, imageDevices=None, deviceIndex=0):
+    """Render a data-driven controller card from a mapping_json structure.
+
+    If physicalKeys/modifiers are given, each row's text comes from the user's real
+    bindings (matched by row['joy']); otherwise the row's sample 'binds' are used
+    (editor preview). mapping = {'title','image','device_ids':[...],'boxes':[...]}.
+    """
+    if Drawing is None:
+        raise RuntimeError("Image generation library (ImageMagick/Wand) is not installed or failed to load.")
+    _init_styles()
+
+    source = mapping['image']
+    name = source if deviceIndex == 0 else '%s-%s' % (source, deviceIndex)
+    filePath = config.pathWithNameAndSuffix(name, '.jpg')
+
+    from pathlib import Path
+    # Data-driven clean images live in the persistent volume (added at runtime via
+    # the mapping editor); fall back to baked res/ for bundled images.
+    candidates = [
+        config.configsPath() / 'controllers' / (source + '.jpg'),
+        Path('../res') / (source + '.jpg'),
+    ]
+    template_path = next((c for c in candidates if c.exists()), None)
+    if template_path is None:
+        raise FileNotFoundError(f"Clean image '{source}.jpg' not found in controllers/ or res/")
+
+    with Image(filename=str(template_path)) as sourceImg:
+        with Drawing() as context:
+            context.font = getFontPath('Regular', 'Normal')
+            context.text_antialias = True
+            context.font_style = 'normal'
+            context.stroke_width = 0
+            context.fill_color = Color('Black')
+            context.fill_opacity = 1
+
+            if mapping.get('title'):
+                context.push()
+                context.font = getFontPath('Black', 'Normal')
+                context.font_size = 52
+                context.fill_color = Color('Black')
+                context.text(x=40, y=64, body=mapping['title'])
+                context.pop()
+            # URL under the title (legacy writeUrlToDrawing uses a fixed position
+            # that collides with data-driven boxes).
+            context.push()
+            context.stroke_color = Color('transparent')
+            context.font = getFontPath('Bold', 'Normal')
+            context.font_size = 30
+            context.fill_color = Color(_LEADER_COLOR)
+            context.text(x=44, y=118, body=config.refcardURL())
+            context.pop()
+
+            styling = styling or mapping.get('styling', 'Group')
+            device_ids = imageDevices or mapping.get('device_ids') or []
+            for box in mapping.get('boxes', []):
+                # Resolve each row's coloured texts: from the user's real bindings
+                # (generation) or the row's sample binds (editor preview).
+                for row in box.get('rows', []):
+                    if physicalKeys is not None and row.get('joy'):
+                        row['_texts'] = _buildJoyTexts(device_ids, row['joy'], deviceIndex,
+                                                       physicalKeys, modifiers or {}, styling)
+                    else:
+                        row['_texts'] = [
+                            {'Text': b.get('name', ''), 'Group': b.get('group', 'General'),
+                             'Style': groupStyles.get(b.get('group', 'General'), groupStyles['General'])}
+                            for b in (row.get('binds') or [])
+                        ]
+                # In generation mode, drop rows the user didn't bind and skip a box
+                # entirely if none of its controls are used (each user binds a different
+                # subset: VR/no-VR, multiple files, with/without pedals). Editor preview
+                # (physicalKeys is None) keeps every box/row so the layout stays visible.
+                if physicalKeys is not None:
+                    kept = [r for r in box.get('rows', []) if r.get('_texts')]
+                    if not kept:
+                        continue
+                    box = {**box, 'rows': kept}
+                _drawDataDrivenBox(context, sourceImg, box, biggestFontSize=40, styling=styling)
+
+            context.draw(sourceImg)
+            sourceImg.save(filename=str(filePath))
+    return True

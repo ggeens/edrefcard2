@@ -1,0 +1,284 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Controllers{% endblock %}
+
+{% block content %}
+<style>
+    #unknown-devices .attach-form {
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    #unknown-devices .attach-form select {
+        min-width: 260px;
+        max-width: 390px;
+        padding: 0.42rem 0.65rem;
+        color: var(--text-primary);
+        background: #101925;
+        border: 1px solid rgba(255, 140, 0, 0.5);
+        border-radius: 5px;
+        color-scheme: dark;
+    }
+    #unknown-devices .attach-form select:focus {
+        outline: none;
+        border-color: var(--ed-orange);
+        box-shadow: 0 0 0 2px rgba(255, 140, 0, 0.2);
+    }
+    #unknown-devices .attach-form option,
+    #unknown-devices .attach-form optgroup {
+        background: #151c27;
+        color: var(--text-primary);
+        font-style: normal;
+    }
+    #unknown-devices .attach-form optgroup {
+        color: var(--ed-orange-light);
+        font-weight: 700;
+    }
+    #unknown-devices .attach-form option[value^="mapping:"] {
+        color: #91e6a8;
+    }
+    #unknown-devices .attach-form option[value^="legacy:"] {
+        color: #a9c7ff;
+    }
+    #unknown-devices .attach-key {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        white-space: nowrap;
+    }
+</style>
+<div class="page-header">
+    <h1>🎛️ Controllers</h1>
+    <p>Vocabulary: a <strong>device</strong> = a hardware ID seen in a .binds; a <strong>controller</strong> = the rendered card.
+       Two engines: <span class="badge badge-success">data-driven</span> (editable table, clean photo + boxes)
+       and <span class="badge badge-muted">legacy</span> (artwork + coordinates baked into bindingsData.py).</p>
+</div>
+
+{% macro unknown_devices() %}
+<details class="card" id="unknown-devices">
+    <summary style="cursor:pointer;color:var(--ed-orange);font-weight:600;padding:0.5rem 0">
+        Unknown devices ({{ unknown|length }}) - review hardware IDs
+    </summary>
+    <p style="color:var(--text-secondary)">
+        Attach only after confirming the same controller variant and input numbering.
+        A configuration name is only a clue, not proof of device identity.
+        Legacy attachments are stored as reviewed runtime aliases and can be verified with a new upload.
+    </p>
+    {% if unknown %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device ID</th>
+                <th>Sightings</th>
+                <th>Last config</th>
+                <th>Last seen</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in unknown %}
+            <tr>
+                <td><code>{{ u.device_id }}</code></td>
+                <td>{{ u.sighting_count }}</td>
+                <td>{% if u.last_run_id %}<a href="/binds/{{ u.last_run_id }}" target="_blank" style="color:var(--ed-orange)">{{ u.last_run_id }}</a>{% endif %}</td>
+                <td>{{ u.last_seen }}</td>
+                <td>
+                    <div class="actions">
+                        <a class="btn btn-primary btn-sm"
+                           href="{{ url_for('admin.mapping_editor', device=u.device_id, **({'from': u.last_run_id} if u.last_run_id else {})) }}">Scaffold</a>
+                        {% if mappings or mappings_legacy %}
+                        <form method="post" action="{{ url_for('admin.controllers_attach') }}" class="attach-form">
+                            <input type="hidden" name="device_id" value="{{ u.device_id }}">
+                            <select name="mapping_id" required aria-label="Target mapping for {{ u.device_id }}" style="width:auto;padding:0.25rem 0.5rem;font-size:0.8rem">
+                                <option value="" selected disabled>Choose a verified match...</option>
+                                {% if mappings %}<optgroup label="Data-driven mappings">
+                                {% for m in mappings %}<option value="mapping:{{ m.id }}">{{ m.device_name }}</option>{% endfor %}
+                                </optgroup>{% endif %}
+                                {% if u.legacy_suggestions %}<optgroup label="Possible legacy matches from config name">
+                                {% for l in u.legacy_suggestions %}<option value="legacy:{{ l.key }}">{{ l.key }} (name clue)</option>{% endfor %}
+                                </optgroup>{% endif %}
+                                <optgroup label="All legacy controllers">
+                                {% for l in mappings_legacy %}<option value="legacy:{{ l.key }}">{{ l.key }} (legacy)</option>{% endfor %}
+                                </optgroup>
+                            </select>
+                            <span class="attach-key" aria-hidden="true">green: editable | blue: legacy</span>
+                            <button class="btn btn-outline btn-sm" type="submit">Attach</button>
+                        </form>
+                        {% endif %}
+                        <form method="post" action="{{ url_for('admin.controllers_dismiss') }}"
+                              onsubmit="return confirm('Dismiss {{ u.device_id }}?')">
+                            <input type="hidden" name="device_id" value="{{ u.device_id }}">
+                            <button class="btn btn-danger btn-sm" type="submit">Dismiss</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-secondary)">No unknown devices pending. 🎉</p>
+    {% endif %}
+</details>
+{% endmacro %}
+
+<div class="card">
+    <div class="card-header">
+        <h2>Controller mappings ({{ mappings|length }})</h2>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('admin.mapping_editor') }}">+ New (editor)</a>
+    </div>
+    {% if mappings %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Device IDs</th>
+                <th>Image</th>
+                <th>Boxes</th>
+                <th>Status</th>
+                <th>Updated</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in mappings|sort(attribute='status') %}
+            <tr>
+                <td>{{ m.device_name }}</td>
+                <td>{% for did in m.device_ids %}<code>{{ did }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+                <td>{{ m.image or '?' }}</td>
+                <td>{{ m.box_count }}</td>
+                <td>
+                    <span class="badge {{ 'badge-success' if m.status == 'published' else 'badge-warning' }}"
+                          title="Drafts are hidden from public rendering until published">{{ m.status }}</span>
+                    {% if m.has_draft and m.status == 'published' %}<span class="badge badge-warning">unpublished changes</span>{% endif %}
+                </td>
+                <td>{{ m.updated_at }}{% if m.updated_by %}<br><span style="color:var(--text-muted);font-size:0.8rem">by {{ m.updated_by }}</span>{% endif %}</td>
+                <td>
+                    <div class="actions">
+                        <a class="btn btn-primary btn-sm"
+                           href="{{ url_for('admin.mapping_editor', device=m.device_id) }}">Open</a>
+                        <a class="btn btn-outline btn-sm"
+                           href="{{ url_for('admin.controllers_history', mapping_id=m.id) }}"
+                           title="Saved versions of this mapping (rollback)">History</a>
+                        {% if role == 'admin' %}
+                        <form method="post" action="{{ url_for('admin.controllers_publish') }}">
+                            <input type="hidden" name="mapping_id" value="{{ m.id }}">
+                            <input type="hidden" name="base_updated_at" value="{{ m.updated_at }}">
+                            {% if m.status == 'published' %}
+                            <input type="hidden" name="state" value="draft">
+                            <button class="btn btn-outline btn-sm" type="submit"
+                                    title="Hide from public rendering">Unpublish</button>
+                            {% else %}
+                            <input type="hidden" name="state" value="published">
+                            <button class="btn btn-primary btn-sm" type="submit"
+                                    title="Make it live for public rendering">Publish</button>
+                            {% endif %}
+                        </form>
+                        {% if m.status == 'published' and m.has_draft %}
+                        <form method="post" action="{{ url_for('admin.controllers_publish') }}"
+                              onsubmit="return confirm('Publish the saved draft? This replaces the public revision.')">
+                            <input type="hidden" name="mapping_id" value="{{ m.id }}">
+                            <input type="hidden" name="base_updated_at" value="{{ m.updated_at }}">
+                            <input type="hidden" name="state" value="published">
+                            <button class="btn btn-primary btn-sm" type="submit">Publish draft</button>
+                        </form>
+                        {% endif %}
+                        {% endif %}
+                        <form method="post" action="{{ url_for('admin.controllers_duplicate') }}" style="display:flex;gap:0.25rem;align-items:center">
+                            <input type="hidden" name="mapping_id" value="{{ m.id }}">
+                            <input type="text" name="new_device_id" placeholder="New device ID"
+                                   style="width:150px;padding:0.25rem 0.5rem;font-size:0.8rem" required>
+                            <label style="font-size:0.75rem;white-space:nowrap" title="L/R variant: photo flipped + coordinates mirrored automatically">
+                                <input type="checkbox" name="mirror" value="1"> mirror</label>
+                            <button class="btn btn-outline btn-sm" type="submit">Duplicate</button>
+                        </form>
+                        {% if role == 'admin' %}
+                        <form method="post" action="{{ url_for('admin.controllers_delete') }}"
+                              onsubmit="return confirm('Delete mapping &quot;{{ m.device_name }}&quot;? Its version history is kept.')">
+                            <input type="hidden" name="mapping_id" value="{{ m.id }}">
+                            <button class="btn btn-outline btn-sm" type="submit"
+                                    style="color:var(--danger,#c0392b)" title="Delete this mapping (admin)">Delete</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-secondary)">No mappings yet.</p>
+    {% endif %}
+</div>
+
+{{ unknown_devices() }}
+
+<div class="card" id="legacy-controllers">
+    <div class="card-header">
+        <h2>Legacy controllers ({{ legacy|length }})</h2>
+        <input type="search" id="legacyfilter" placeholder="Filter..." style="width:220px">
+    </div>
+    <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:0">
+        Artwork and coordinates baked into <code>bindingsData.py</code>: not editable here.
+        To migrate one to data-driven, create a mapping for its device IDs in the editor.
+    </p>
+    <table id="legacytable">
+        <thead>
+            <tr>
+                <th>Controller</th>
+                <th>Template</th>
+                <th>Device IDs</th>
+                <th>Engine</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for l in legacy %}
+            <tr>
+                <td>{{ l.key }}</td>
+                <td>{{ l.template }}</td>
+                <td>{% for did in l.device_ids %}<code>{{ did }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+                <td>
+                    <span class="badge badge-muted">legacy</span>
+                    {% if l.dd_overlap %}<span class="badge badge-success" title="A data-driven mapping also covers one of its device IDs">+ data-driven</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Recent activity</h2>
+    </div>
+    {% if audit %}
+    <table>
+        <thead>
+            <tr><th>When</th><th>Actor</th><th>Action</th><th>Device</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+            {% for a in audit %}
+            <tr>
+                <td style="white-space:nowrap">{{ a.created_at }}</td>
+                <td>{{ a.actor or '?' }}</td>
+                <td><span class="badge {{ 'badge-success' if a.action == 'publish' else ('badge-warning' if a.action in ('update', 'create', 'duplicate') else 'badge-muted') }}">{{ a.action }}</span></td>
+                <td>{% if a.device_id %}<code>{{ a.device_id }}</code>{% endif %}</td>
+                <td style="color:var(--text-secondary)">{{ a.detail or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-secondary)">No activity recorded yet.</p>
+    {% endif %}
+</div>
+
+<script>
+document.getElementById('legacyfilter').addEventListener('input', function () {
+    const q = this.value.toLowerCase();
+    document.querySelectorAll('#legacytable tbody tr').forEach(tr => {
+        tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+});
+</script>
+{% endblock %}

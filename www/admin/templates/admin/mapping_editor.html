@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapping editor - EDRefCard admin</title>
+<style>
+  :root{--ink:#1c1b1a;--muted:#6b6864;--accent:#962320;--line:#dcd9d3;--bg:#f4f3f0;--card:#fff;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg);}
+  header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  header h1{font-size:1rem;margin:0 12px 0 0;font-weight:800}
+  input,select,button{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:#fff}
+  input[type=text],input[type=number]{min-width:90px}
+  button{cursor:pointer;background:#fff}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  button.ghost{background:#fff}
+  #status{color:var(--muted);font-size:.85rem;margin-left:auto}
+  .wrap{display:flex;gap:14px;padding:14px;align-items:flex-start}
+  #stagewrap{flex:1 1 auto;min-width:0;overflow:auto;max-height:88vh}
+  #stagewrap.panning{cursor:grab}
+  #stagewrap.panning:active{cursor:grabbing}
+  #stage{position:relative;display:inline-block;border:1px solid var(--line);background:#fafafa}
+  #stage img{display:block;user-select:none;-webkit-user-drag:none}
+  #lines{position:absolute;left:0;top:0;pointer-events:none}
+  .box{position:absolute;border:2px solid #1c1b1a;background:rgba(255,255,255,.55);cursor:move;font-size:11px;overflow:hidden}
+  .box .mrow{padding:0 3px;white-space:nowrap;overflow:hidden;border-top:1px solid rgba(0,0,0,.15);color:#1c1b1a;pointer-events:none}
+  .box .mrow b{color:var(--accent)}
+  .box.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(150,35,30,.25)}
+  .box .lbl{position:absolute;top:-18px;left:0;background:#cfcfcf;color:#000;padding:0 5px;font-weight:700;white-space:nowrap}
+  .box .rsz{position:absolute;right:-6px;bottom:-6px;width:12px;height:12px;background:var(--accent);border-radius:50%;cursor:nwse-resize}
+  .marker{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border:2px solid #fff;background:var(--accent);border-radius:50%;cursor:move;box-shadow:0 0 0 1px var(--accent)}
+  .marker:hover{box-shadow:0 0 0 3px rgba(150,35,30,.35)}
+  #panel{flex:0 0 380px;max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+  #panel h2{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .boxcard{border:1px solid var(--line);border-radius:6px;padding:8px;margin:0 0 10px}
+  .boxcard.sel{border-color:var(--accent)}
+  .boxcard .hd{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+  .boxcard .hd input{flex:1}
+  .row{display:grid;grid-template-columns:74px 52px 1fr auto;gap:4px;margin:4px 0}
+  .row select,.row input{padding:4px 5px;font-size:.82rem;min-width:0;width:100%}
+  .small{font-size:.78rem;color:var(--muted)}
+  .del{color:var(--accent);border-color:#e6c7c4;padding:4px 8px}
+  #preview{margin-top:10px}
+  #preview img{max-width:100%;border:1px solid var(--line);border-radius:6px}
+  .hint{background:#fff8e1;border:1px solid #ffe082;padding:6px 9px;border-radius:6px;font-size:.82rem;margin-bottom:8px}
+  details{margin-top:10px}
+  textarea{width:100%;height:130px;font-family:ui-monospace,monospace;font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mapping editor</h1>
+  <input type="file" id="file" accept="image/*">
+  <input type="text" id="imgname" placeholder="image name (slug)" title="Image name (slug)">
+  <label style="font-size:.78rem;white-space:nowrap" title="Place the photo in the middle third of a wider white canvas, so boxes get side margins. Untick if your image is already a composed card."><input type="checkbox" id="pad" checked> side margins</label>
+  <button id="btnupload" class="ghost">Upload image</button>
+  <input type="file" id="pdffile" accept="application/pdf" style="display:none">
+  <button id="btnpdf" class="ghost" title="Import a manufacturer fillable reference sheet (VIRPIL-style AcroForm PDF): artwork + every box pre-positioned with its Joy mapping">Import PDF</button>
+  <span style="width:1px;height:24px;background:var(--line)"></span>
+  <input type="text" id="title" placeholder="Title (e.g. VIRPIL AEROMAX R)">
+  <input type="text" id="deviceid" placeholder="Device ID (e.g. 231D0F0F)">
+  <button id="btnaddbox" class="ghost">+ Box</button>
+  <select id="stamp" title="Burst mode: pick a stamp then click each physical control on the photo (1 click = 1 anchored box)">
+    <option value="">Stamp: off</option>
+    <option value="btn">Button</option>
+    <option value="hat4">Hat 4-way</option>
+    <option value="hat5">Hat 4-way + push</option>
+    <option value="pov">POV</option>
+    <option value="trigger">2-stage trigger</option>
+    <option value="stick">Stick (X+Y)</option>
+    <option value="axis">Axis</option>
+  </select>
+  <input type="number" id="stampnum" value="1" min="1" style="width:58px" title="Next Joy_N (auto-incremented)">
+  <input type="number" id="stamppov" value="1" min="1" style="width:44px" title="Next POV">
+  <button id="btnarrange" class="ghost" title="Auto-arrange boxes into 2 columns sorted by button position (no leader-line crossings)">Arrange</button>
+  <label style="font-size:.78rem;white-space:nowrap" title="While dragging: snap to a 20px grid and to neighbour box edges (blue dashed guides)"><input type="checkbox" id="snap" checked> snap</label>
+  <span id="aligntools" hidden>
+    <button id="alleft" class="ghost" title="Align left edges">&#8676;</button>
+    <button id="alright" class="ghost" title="Align right edges">&#8677;</button>
+    <button id="alwidth" class="ghost" title="Same width (as the last-selected box)">&#8596;</button>
+    <button id="alvspace" class="ghost" title="Equal vertical spacing">&#8645;</button>
+  </span>
+  <span style="width:1px;height:24px;background:var(--line)"></span>
+  <button id="zoomout" class="ghost" title="Zoom out (Ctrl+wheel)">&minus;</button>
+  <button id="zoomfit" class="ghost" title="Fit to window">Fit</button>
+  <button id="zoomin" class="ghost" title="Zoom in (Ctrl+wheel)">+</button>
+  <button id="btnundo" class="ghost" title="Undo (Ctrl+Z)">&#8630;</button>
+  <button id="btnredo" class="ghost" title="Redo (Ctrl+Y)">&#8631;</button>
+  <button id="btnpreview" class="ghost">Preview</button>
+  <button id="btnsave" class="primary" title="Save a draft without changing the public card">Save draft</button>
+  <span id="status" role="status" aria-live="polite"></span>
+</header>
+
+<div class="wrap">
+  <div id="stagewrap">
+    <div id="stage"><img id="img" alt="" draggable="false"><canvas id="lines"></canvas></div>
+  </div>
+  <div id="panel">
+    <h2>Boxes</h2>
+    <p class="small">Saving keeps the public revision unchanged. An admin publishes the saved draft from Controllers.</p>
+    <p class="small" id="hardwareids"></p>
+    <div id="recovery" class="hint" hidden>
+      <span id="recoverytext"></span>
+      <button id="btnrestore" type="button">Restore local draft</button>
+      <button id="btndiscardlocal" type="button">Discard local draft</button>
+    </div>
+    <div class="hint" id="hint">
+      <span style="float:right;white-space:nowrap">
+        <a href="/admin/help" title="Full mapper guide">&#128214; Guide</a> &nbsp;|&nbsp;
+        <a href="#" data-lang="en">EN</a> &middot; <a href="#" data-lang="fr">FR</a> &middot; <a href="#" data-lang="es">ES</a>
+      </span>
+      <span id="hint_en">1) Upload a clean photo. 2) + Box, drag/resize it. 3) Add rows (symbol, number, Joy). 4) "Set btn" then click the physical button on the photo. 5) Preview / Save.<br>
+      <b>Shortcuts</b>: Ctrl+wheel = zoom &middot; Space+drag = pan &middot; Shift+click = multi-select (then align tools appear) &middot; drag the red dot = move the anchor &middot; arrows = move selection (Shift = x10) &middot; Del = delete &middot; Ctrl+D = duplicate &middot; Ctrl+Z/Y = undo/redo.</span>
+      <span id="hint_fr" hidden>1) Upload une photo propre. 2) + Box, glisse/redimensionne. 3) Ajoute des lignes (symbole, numéro, Joy). 4) "Set btn" puis clique le bouton sur l'image. 5) Preview / Save.<br>
+      <b>Raccourcis</b> : Ctrl+molette = zoom &middot; Espace+glisser = déplacer la vue &middot; Shift+clic = multi-sélection (outils d'alignement) &middot; glisser le point rouge = déplacer l'ancre &middot; flèches = bouger la sélection (Shift = x10) &middot; Suppr = supprimer &middot; Ctrl+D = dupliquer &middot; Ctrl+Z/Y = annuler/rétablir.</span>
+      <span id="hint_es" hidden>1) Sube una foto limpia. 2) + Box, arrastra/redimensiona. 3) A&ntilde;ade filas (s&iacute;mbolo, n&uacute;mero, Joy). 4) "Set btn" y haz clic en el bot&oacute;n f&iacute;sico sobre la foto. 5) Preview / Save.<br>
+      <b>Atajos</b>: Ctrl+rueda = zoom &middot; Espacio+arrastrar = mover la vista &middot; Shift+clic = multi-selecci&oacute;n (herramientas de alineaci&oacute;n) &middot; arrastra el punto rojo = mover el ancla &middot; flechas = mover la selecci&oacute;n (Shift = x10) &middot; Supr = borrar &middot; Ctrl+D = duplicar &middot; Ctrl+Z/Y = deshacer/rehacer.</span>
+    </div>
+    {% if draft_note %}<div class="hint" style="background:#e8f4e8;border-color:#a5cca5">{{ draft_note }}</div>{% endif %}
+    <details id="scaffolder"><summary class="small">Blank scaffold (from manufacturer docs, no .binds)</summary>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+        <label class="small">Buttons <input type="number" id="sc_btn" value="16" min="0" max="128" style="width:64px"></label>
+        <label class="small">POVs <input type="number" id="sc_pov" value="1" min="0" max="4" style="width:52px"></label>
+      </div>
+      <div class="small" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        Axes:
+        <label><input type="checkbox" class="sc_ax" value="X" checked>X</label>
+        <label><input type="checkbox" class="sc_ax" value="Y" checked>Y</label>
+        <label><input type="checkbox" class="sc_ax" value="Z">Z</label>
+        <label><input type="checkbox" class="sc_ax" value="RX">RX</label>
+        <label><input type="checkbox" class="sc_ax" value="RY">RY</label>
+        <label><input type="checkbox" class="sc_ax" value="RZ">RZ</label>
+        <label><input type="checkbox" class="sc_ax" value="U">U</label>
+        <label><input type="checkbox" class="sc_ax" value="V">V</label>
+      </div>
+      <button id="btnscaffold" class="ghost" style="margin-bottom:8px">Generate boxes</button>
+    </details>
+    <div id="boxes"></div>
+    <details><summary class="small">mapping_json</summary>
+      <textarea id="json" readonly></textarea>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <button id="btnjsondl" class="ghost" style="font-size:.78rem" title="Download the mapping as a .json file (backup, sharing, forum review)">Download JSON</button>
+        <input type="file" id="jsonfile" accept=".json,application/json" style="display:none">
+        <button id="btnjsonimp" class="ghost" style="font-size:.78rem" title="Load a mapping .json exported from this editor (replaces current boxes)">Import JSON</button>
+      </div>
+    </details>
+    <div id="preview"></div>
+  </div>
+</div>
+
+<script>
+const EXISTING = JSON.parse({{ existing_json|tojson }});
+const EDITOR_USER = {{ editor_user|default('mapper')|tojson }};
+const SYMS = ["","press","up","right","down","left","stage1","stage2","push","pull"];
+const TYPES = ["Digital","Analogue"];
+const GROUPS = ["General","Ship","SRV","UI","Camera","Fighter","Head look","Galaxy map","Scanners","Holo-Me","Multicrew","OnFoot","Settlement","Misc"];
+
+let state = {title:"", image:null, width:0, height:0, boxes:[]};
+let sel = -1;          // primary selected box index (last clicked)
+let selSet = new Set();// multi-selection (Shift+click); always contains sel when sel>=0
+let setBtnFor = -1;    // box index awaiting a button-point click
+let scale = 1;
+
+function selectOnly(i){ sel = i; selSet = i >= 0 ? new Set([i]) : new Set(); }
+function toggleSel(i){
+  if(selSet.has(i)){ selSet.delete(i); if(sel === i) sel = selSet.size ? [...selSet].pop() : -1; }
+  else { selSet.add(i); sel = i; }
+}
+function clearSel(){ sel = -1; selSet = new Set(); }
+function updateAlignTools(){ $("#aligntools").hidden = selSet.size < 2; }
+
+const $ = s => document.querySelector(s);
+const stage = $("#stage"), img = $("#img");
+const wrap = $("#stagewrap"), lines = $("#lines");
+
+// ---- ergonomics state ----
+let zoom = null;                 // null = fit-to-window
+let spaceDown = false, dirty = false, lastAction = '';
+let baseUpdatedAt = null;        // optimistic-concurrency token for Save
+let mappingId = EXISTING?.id || null;
+let savedDeviceId = EXISTING?.device_id || null;
+const undoStack = [], redoStack = [];
+const draftParams = new URLSearchParams(location.search);
+// Each new controller gets its own recovery slot, retained on reload.
+if(!draftParams.get('device') && !draftParams.get('draft')){
+  draftParams.set('draft', crypto.randomUUID());
+  history.replaceState(null, '', location.pathname+'?'+draftParams);
+}
+const LEGACY_LS_KEY = 'mapedit:' + (draftParams.get('device') || 'new');
+let LS_KEY = 'mapedit:v2:' + EDITOR_USER + ':' + (draftParams.get('device')?.toUpperCase() || draftParams.get('draft'));
+let pendingRecovery = null, ready = false, saveInFlight = false;
+
+function captureDocument(){
+  return JSON.stringify({state, title:$('#title').value, deviceid:$('#deviceid').value,
+                         imgname:$('#imgname').value});
+}
+function restoreDocument(value){
+  const doc = typeof value === 'string' ? JSON.parse(value) : value;
+  state = structuredClone(doc.state);
+  $('#title').value = doc.title || '';
+  $('#deviceid').value = doc.deviceid || '';
+  if(mappingId) $('#deviceid').value = savedDeviceId;
+  $('#imgname').value = doc.imgname || state.image || '';
+  clearSel(); setBtnFor = -1; lastAction = ''; dirty = true;
+  if(state.image) loadImage(state.image);
+  else { img.removeAttribute('src'); img.style.width=''; renderPanel(); renderStage(); }
+  autosave();
+}
+
+function snapshot(action, before){
+  if(action === 'arrow' && lastAction === 'arrow') return;  // group arrow nudges
+  lastAction = action || '';
+  undoStack.push(before || captureDocument());
+  if(undoStack.length > 100) undoStack.shift();
+  redoStack.length = 0;
+  dirty = true;
+}
+function undo(){ if(!undoStack.length) return; redoStack.push(captureDocument()); restoreDocument(undoStack.pop()); }
+function redo(){ if(!redoStack.length) return; undoStack.push(captureDocument()); restoreDocument(redoStack.pop()); }
+
+function lockEditing(locked){
+  document.querySelectorAll('header input,header select,header button').forEach(el=>el.disabled=locked);
+  ['#stagewrap','#boxes','#scaffolder'].forEach(s=>$(s).inert=locked);
+  $('#btnjsonimp').disabled=locked;
+}
+function bindAsync(selector, action, event='click'){
+  $(selector).addEventListener(event, async e=>{
+    if(saveInFlight || pendingRecovery) return;
+    saveInFlight=true; lockEditing(true);
+    try{ await action(e); }
+    catch(error){
+      $('#status').textContent=error.name==='AbortError'
+        ? 'Request timed out. Your work is kept locally. Retry or download JSON.'
+        : (error.message || 'Request failed. Your work is kept locally. Retry or download JSON.');
+      flushDraft();
+    }finally{ saveInFlight=false;lockEditing(Boolean(pendingRecovery)); }
+  });
+}
+async function requestJSON(url, options){
+  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),30000);
+  try{
+    const response=await fetch(url,{...options,signal:controller.signal});
+    if(response.redirected || response.status===401 || response.status===403)
+      throw new Error('Session expired or access denied. Keep this tab open, sign in in another tab, then retry.');
+    let data;
+    try{data=await response.json();}catch(e){throw new Error('The server returned an unexpected response. Your work is kept locally. Retry or download JSON.');}
+    if(!response.ok) throw new Error(data.error || 'The server could not complete the request. Retry or download JSON.');
+    return data;
+  }catch(error){
+    if(error instanceof TypeError) throw new Error('Network unavailable. Your work is kept locally. Retry or download JSON.');
+    throw error;
+  }finally{clearTimeout(timeout);}
+}
+
+function applyZoom(){
+  if(!state.width || !img.src) return;
+  const z = zoom === null ? Math.min(1, (wrap.clientWidth - 2) / state.width) : zoom;
+  img.style.width = Math.max(1, Math.round(state.width * z)) + 'px';
+}
+function setZoom(z, cx, cy){
+  const wr = wrap.getBoundingClientRect();
+  if(cx === undefined){ cx = wr.left + wrap.clientWidth / 2; cy = wr.top + wrap.clientHeight / 2; }
+  const sr = stage.getBoundingClientRect();
+  const ix = (cx - sr.left) / (scale || 1), iy = (cy - sr.top) / (scale || 1);  // image coords
+  zoom = Math.min(4, Math.max(0.05, z));
+  applyZoom(); computeScale();
+  wrap.scrollLeft = ix * scale - (cx - wr.left);
+  wrap.scrollTop = iy * scale - (cy - wr.top);
+  renderStage();
+}
+
+let saveTimer = null;
+let storedRecoveryValue = null;
+function flushDraft(){
+  clearTimeout(saveTimer);
+  if(!ready || !dirty || pendingRecovery) return;
+  try{
+    const current=localStorage.getItem(LS_KEY);
+    if(current && current!==storedRecoveryValue){
+      $('#status').textContent='Another tab has a local draft for this controller. Save to the server or download JSON; its local draft has not been overwritten.';
+      return;
+    }
+    const value=JSON.stringify({version:2,ts:Date.now(),base_updated_at:baseUpdatedAt,
+      mapping_id:mappingId,document:JSON.parse(captureDocument())});
+    localStorage.setItem(LS_KEY,value);storedRecoveryValue=value;
+  }catch(e){ $('#status').textContent='Local recovery is unavailable. Save your draft or download JSON before leaving.'; }
+}
+function autosave(){
+  clearTimeout(saveTimer);
+  if(ready && dirty && !pendingRecovery) saveTimer = setTimeout(flushDraft, 400);
+}
+
+function loadExisting(){
+  if(!EXISTING) return;
+  try{
+    const m = JSON.parse(EXISTING.mapping_json);
+    baseUpdatedAt = EXISTING.updated_at || null;
+    state = Object.assign({title:"",image:null,width:0,height:0,boxes:[]}, m);
+    state.width = state.width || EXISTING.image_width || 0;
+    state.height = state.height || EXISTING.image_height || 0;
+    $("#title").value = state.title||EXISTING.device_name||"";
+    $("#imgname").value = state.image||"";
+    $("#deviceid").value = EXISTING.device_id||"";
+    $('#deviceid').readOnly = Boolean(mappingId);
+    if(state.image){ loadImage(state.image); }
+  }catch(e){ console.warn(e); }
+}
+
+// Load the clean image, trying the editable volume first, then the baked res/ fallback.
+function loadImage(slug){
+  img.onload = ()=>{
+    if(!state.width) state.width = img.naturalWidth;
+    if(!state.height) state.height = img.naturalHeight;
+    applyZoom(); renderStage(); renderPanel();
+  };
+  img.onerror = ()=>{
+    if(img.dataset.fb){ $("#status").textContent = "Image not found: "+slug; renderPanel(); return; }
+    img.dataset.fb = "1"; img.src = "/res/"+slug+".jpg";
+  };
+  delete img.dataset.fb;
+  img.src = "/configs/controllers/"+slug+".jpg";
+}
+
+function computeScale(){ scale = img.clientWidth / (state.width||img.naturalWidth||1); }
+
+function renderStage(){
+  computeScale();
+  // remove existing overlays
+  stage.querySelectorAll('.box,.marker').forEach(n=>n.remove());
+  // Live content preview: the same header/rows the renderer will draw,
+  // approximated in HTML (row grid = 72 image px, header = 40)
+  const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const GLYPH={press:'●',up:'▲',right:'▶',down:'▼',left:'◀',stage1:'◔',stage2:'◕',push:'⊙',pull:'↺'};
+  const k=(state.width||4400)/4400;
+  state.boxes.forEach((b,i)=>{
+    const rows=b.rows||[], chrome=!b.no_chrome;
+    const headerH=chrome?Math.max(2,40*k*scale):0;
+    const rowH=chrome?Math.max(4,72*k*scale):Math.max(4,(b.box_wh[1]*scale)/Math.max(rows.length,1));
+    const fs=Math.max(6,Math.min(14,Math.round(rowH*0.55)));
+    const d=document.createElement('div'); d.className='box'+(selSet.has(i)?' sel':'');
+    d.style.left=(b.box_xy[0]*scale)+'px'; d.style.top=(b.box_xy[1]*scale)+'px';
+    d.style.width=(b.box_wh[0]*scale)+'px'; d.style.height=(b.box_wh[1]*scale)+'px';
+    const rowsHtml=rows.map(r=>{
+      // The final card prints the number, not the Joy key: only show the
+      // Joy when it adds information (POV/axes, or number/Joy mismatch)
+      const joyDup=r.joy && r.number!=null && r.joy===('Joy_'+r.number);
+      return `<div class="mrow" style="font-size:${fs}px;height:${rowH}px;line-height:${rowH}px">`+
+      `${GLYPH[r.symbol]||''} ${esc(r.number)}${joyDup?'':' <b>'+esc(r.joy)+'</b>'}</div>`;}).join('');
+    d.innerHTML=(chrome?'<span class="lbl">'+esc(b.label||'box '+(i+1))+'</span>':'')+
+      `<div style="height:${headerH}px;pointer-events:none"></div>`+rowsHtml+
+      '<span class="rsz"></span>';
+    d.addEventListener('mousedown',e=>startDrag(e,i,d));
+    d.querySelector('.rsz').addEventListener('mousedown',e=>{e.stopPropagation();startResize(e,i,d);});
+    stage.appendChild(d);
+    if(b.button_xy){
+      const m=document.createElement('div'); m.className='marker';
+      m.style.left=(b.button_xy[0]*scale)+'px'; m.style.top=(b.button_xy[1]*scale)+'px';
+      m.title=(b.label||'box '+(i+1))+' anchor (drag to move)';
+      m.addEventListener('mousedown',e=>startMarkerDrag(e,i));
+      stage.appendChild(m);
+    }
+  });
+  updateAlignTools();
+  // live leader lines (box edge -> button point), same idea as the renderer
+  lines.width = img.clientWidth || 0; lines.height = img.clientHeight || 0;
+  if(lines.width){
+    const ctx = lines.getContext('2d');
+    ctx.clearRect(0, 0, lines.width, lines.height);
+    ctx.strokeStyle = '#b8241f'; ctx.lineWidth = Math.max(1, 3 * scale);
+    state.boxes.forEach(b => {
+      if(!b.button_xy) return;
+      const [bx, by] = b.button_xy;
+      const ax = Math.min(Math.max(bx, b.box_xy[0]), b.box_xy[0] + b.box_wh[0]);
+      const ay = Math.min(Math.max(by, b.box_xy[1]), b.box_xy[1] + b.box_wh[1]);
+      if(ax === bx && ay === by) return;  // button inside the box
+      ctx.beginPath(); ctx.moveTo(ax * scale, ay * scale); ctx.lineTo(bx * scale, by * scale); ctx.stroke();
+    });
+    if(guides.length){
+      ctx.save(); ctx.strokeStyle='#2b6cb0'; ctx.setLineDash([6,4]); ctx.lineWidth=1;
+      guides.forEach(g=>{
+        ctx.beginPath();
+        if(g.x!==undefined){ ctx.moveTo(g.x*scale,0); ctx.lineTo(g.x*scale,lines.height); }
+        else { ctx.moveTo(0,g.y*scale); ctx.lineTo(lines.width,g.y*scale); }
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+  }
+  $("#json").value = JSON.stringify(mapping(),null,1);
+  $('#hardwareids').textContent='Hardware IDs: '+(mapping().device_ids.join(', ') || 'not set');
+  autosave();
+}
+
+// Snap the dragged box to a 20px grid and to neighbour box edges; fills
+// `guides` (blue dashed lines drawn by renderStage) with the matched edges.
+let guides = [];
+function snapPos(i, x, y){
+  guides = [];
+  if(!$("#snap").checked) return [Math.max(0,Math.round(x)), Math.max(0,Math.round(y))];
+  const w=state.boxes[i].box_wh[0], h=state.boxes[i].box_wh[1];
+  const tol = 8/(scale||1);
+  let bx=null, by=null;
+  state.boxes.forEach((o,j)=>{
+    if(j===i || selSet.has(j)) return;
+    [o.box_xy[0], o.box_xy[0]+o.box_wh[0]].forEach(ex=>{
+      [{d:Math.abs(x-ex), nx:ex}, {d:Math.abs(x+w-ex), nx:ex-w}].forEach(c=>{
+        if(c.d<=tol && (!bx || c.d<bx.d)) bx={d:c.d, pos:c.nx, g:ex};
+      });
+    });
+    [o.box_xy[1], o.box_xy[1]+o.box_wh[1]].forEach(ey=>{
+      [{d:Math.abs(y-ey), ny:ey}, {d:Math.abs(y+h-ey), ny:ey-h}].forEach(c=>{
+        if(c.d<=tol && (!by || c.d<by.d)) by={d:c.d, pos:c.ny, g:ey};
+      });
+    });
+  });
+  if(bx){ x=bx.pos; guides.push({x:bx.g}); } else { x=Math.round(x/20)*20; }
+  if(by){ y=by.pos; guides.push({y:by.g}); } else { y=Math.round(y/20)*20; }
+  return [Math.max(0,Math.round(x)), Math.max(0,Math.round(y))];
+}
+
+function startDrag(e,i,d){
+  if(spaceDown) return;
+  e.preventDefault();
+  if(e.shiftKey){ toggleSel(i); renderPanel(); renderStage(); return; }  // Shift+click = add/remove from selection
+  if(!selSet.has(i)) selectOnly(i);
+  snapshot('drag'); renderPanel(); renderStage();
+  // drag every selected box together, keeping their relative offsets;
+  // snapping is computed on the grabbed box and applied to the whole group
+  const idxs=[...selSet];
+  const starts=idxs.map(k=>state.boxes[k].box_xy.slice());
+  const pq=idxs.indexOf(i);
+  const sx=e.clientX, sy=e.clientY;
+  function mv(ev){
+    const dx=(ev.clientX-sx)/scale, dy=(ev.clientY-sy)/scale;
+    const [nx,ny]=snapPos(i, starts[pq][0]+dx, starts[pq][1]+dy);
+    const adx=nx-starts[pq][0], ady=ny-starts[pq][1];
+    idxs.forEach((k,q)=>{
+      state.boxes[k].box_xy=[Math.max(0,Math.round(starts[q][0]+adx)),Math.max(0,Math.round(starts[q][1]+ady))];
+    });
+    renderStage();
+  }
+  function up(){ guides=[]; renderStage(); document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+
+// Drag the red anchor point directly (no more Set btn + re-click needed)
+function startMarkerDrag(e,i){
+  if(spaceDown) return;
+  e.preventDefault(); e.stopPropagation();
+  snapshot('btnmove');
+  const r=stage.getBoundingClientRect(), b=state.boxes[i];
+  function mv(ev){
+    b.button_xy=[Math.max(0,Math.round((ev.clientX-r.left)/scale)),Math.max(0,Math.round((ev.clientY-r.top)/scale))];
+    renderStage();
+  }
+  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+function startResize(e,i,d){
+  if(spaceDown) return;
+  e.preventDefault(); snapshot('resize'); const r=stage.getBoundingClientRect(), b=state.boxes[i];
+  function mv(ev){ b.box_wh=[Math.max(40,Math.round((ev.clientX-r.left)/scale-b.box_xy[0])),Math.max(30,Math.round((ev.clientY-r.top)/scale-b.box_xy[1]))]; renderStage(); }
+  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+
+stage.addEventListener('click',e=>{
+  if(spaceDown || !scale) return;
+  const onBox = ['box','rsz','lbl','marker'].some(c=>e.target.classList.contains(c));
+  const r=stage.getBoundingClientRect();
+  const px=Math.round((e.clientX-r.left)/scale), py=Math.round((e.clientY-r.top)/scale);
+  if(setBtnFor>=0){
+    snapshot('btn');
+    state.boxes[setBtnFor].button_xy=[px,py];
+    setBtnFor=-1; $("#status").textContent="Button point set."; renderStage(); renderPanel();
+    return;
+  }
+  const st=$("#stamp").value;
+  if(st && !onBox) stampAt(st,px,py);
+});
+
+// Burst stamping: one click per PHYSICAL control (a box has a single anchor
+// point, so a 4-way hat + push is ONE click, its 5 rows are pre-filled).
+function stampAt(kind,px,py){
+  snapshot('stamp');
+  let n=+$("#stampnum").value||1, p=+$("#stamppov").value||1;
+  const mk=(symbol,number,joy)=>({symbol,number,joy,type:'Digital'});
+  let rows=[],label='';
+  if(kind==='btn'){ label='BTN '+n; rows=[mk('press',String(n),'Joy_'+n)]; n+=1; }
+  else if(kind==='hat4'){ label='HAT '+n+'-'+(n+3); rows=['up','right','down','left'].map((s,i)=>mk(s,String(n+i),'Joy_'+(n+i))); n+=4; }
+  else if(kind==='hat5'){ label='HAT '+n+'-'+(n+4); rows=['up','right','down','left'].map((s,i)=>mk(s,String(n+i),'Joy_'+(n+i))); rows.push(mk('press',String(n+4),'Joy_'+(n+4))); n+=5; }
+  else if(kind==='pov'){ label='POV'+p; rows=['Up','Right','Down','Left'].map(d=>mk(d.toLowerCase(),null,'Joy_POV'+p+d)); p+=1; }
+  else if(kind==='trigger'){ label='TRIGGER'; rows=[mk('stage1',String(n),'Joy_'+n),mk('stage2',String(n+1),'Joy_'+(n+1))]; n+=2; }
+  else if(kind==='stick'){ label='STICK'; rows=[{symbol:null,number:'X',joy:'Joy_XAxis',type:'Analogue'},{symbol:null,number:'Y',joy:'Joy_YAxis',type:'Analogue'}]; }
+  else if(kind==='axis'){ label='AXIS'; rows=[{symbol:null,number:null,joy:'',type:'Analogue'}]; }
+  else return;
+  const k=(state.width||4400)/4400;
+  const w=Math.round((state.width||4400)*0.25), h=Math.round((40+72*rows.length)*k);
+  const bx=Math.max(0,Math.min(px+Math.round(60*k),(state.width||4400)-w));
+  state.boxes.push({label, box_xy:[bx,py], box_wh:[w,h], button_xy:[px,py], rows});
+  $("#stampnum").value=n; $("#stamppov").value=p;
+  selectOnly(state.boxes.length-1);
+  renderPanel(); renderStage();
+  $("#status").textContent=label+" anchored ("+px+","+py+"). Click the next control, then Arrange.";
+}
+
+// Auto-arrange: two margin columns, each sorted by the anchor's Y, so leader
+// lines never cross within a column. Floating boxes go under the left column.
+$("#btnarrange").addEventListener('click',()=>{
+  if(!state.boxes.length) return;
+  snapshot('arrange');
+  const W=state.width||4400,H=state.height||2560,k=W/4400;
+  const colW=Math.round(W*0.314), colX=[Math.round(W*0.016), W-colW-Math.round(W*0.016)];
+  const anch=state.boxes.filter(b=>b.button_xy), free=state.boxes.filter(b=>!b.button_xy);
+  const left=anch.filter(b=>b.button_xy[0]<W/2).sort((a,b)=>a.button_xy[1]-b.button_xy[1]);
+  const right=anch.filter(b=>b.button_xy[0]>=W/2).sort((a,b)=>a.button_xy[1]-b.button_xy[1]);
+  left.push(...free);
+  [[left,0],[right,1]].forEach(([col,ci])=>{
+    let y=Math.round(H*0.08);
+    col.forEach(b=>{
+      const h=Math.round((40+72*Math.max(1,(b.rows||[]).length))*k);
+      b.box_xy=[colX[ci],y]; b.box_wh=[colW,h];
+      y+=h+Math.round(60*k);
+    });
+  });
+  clearSel(); renderPanel(); renderStage();
+  $("#status").textContent="Arranged: "+left.length+" left, "+right.length+" right.";
+});
+
+// ---- multi-selection alignment / distribution ----
+function alignSelected(kind){
+  const idxs=[...selSet].filter(k=>state.boxes[k]);
+  if(idxs.length<2) return;
+  snapshot('align');
+  const boxes=idxs.map(k=>state.boxes[k]);
+  if(kind==='left'){
+    const x=Math.min(...boxes.map(b=>b.box_xy[0]));
+    boxes.forEach(b=>{ b.box_xy=[x,b.box_xy[1]]; });
+  }else if(kind==='right'){
+    const r=Math.max(...boxes.map(b=>b.box_xy[0]+b.box_wh[0]));
+    boxes.forEach(b=>{ b.box_xy=[r-b.box_wh[0],b.box_xy[1]]; });
+  }else if(kind==='width'){
+    const w=state.boxes[sel]?state.boxes[sel].box_wh[0]:boxes[0].box_wh[0];
+    boxes.forEach(b=>{ b.box_wh=[w,b.box_wh[1]]; });
+  }else if(kind==='vspace'){
+    const sorted=boxes.slice().sort((a,b)=>a.box_xy[1]-b.box_xy[1]);
+    const top=sorted[0].box_xy[1];
+    const bottom=Math.max(...sorted.map(b=>b.box_xy[1]+b.box_wh[1]));
+    const sumH=sorted.reduce((s,b)=>s+b.box_wh[1],0);
+    const gap=Math.max(0,Math.round((bottom-top-sumH)/(sorted.length-1)));
+    let y=top;
+    sorted.forEach(b=>{ b.box_xy=[b.box_xy[0],y]; y+=b.box_wh[1]+gap; });
+  }
+  renderStage();
+  $("#status").textContent="Aligned ("+kind+"): "+idxs.length+" boxes.";
+}
+$("#alleft").addEventListener('click',()=>alignSelected('left'));
+$("#alright").addEventListener('click',()=>alignSelected('right'));
+$("#alwidth").addEventListener('click',()=>alignSelected('width'));
+$("#alvspace").addEventListener('click',()=>alignSelected('vspace'));
+
+function renderPanel(){
+  const c=$("#boxes"); c.innerHTML='';
+  const attr=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  state.boxes.forEach((b,i)=>{
+    const card=document.createElement('div'); card.className='boxcard'+(selSet.has(i)?' sel':'');
+    let rowsHtml='';
+    (b.rows||[]).forEach((row,j)=>{
+      rowsHtml+=`<div class="row">
+        <select data-i="${i}" data-j="${j}" data-k="symbol">${SYMS.map(s=>`<option ${s===(row.symbol||'')?'selected':''}>${s}</option>`).join('')}</select>
+        <input type="text" data-i="${i}" data-j="${j}" data-k="number" value="${attr(row.number)}" placeholder="n°">
+        <input type="text" data-i="${i}" data-j="${j}" data-k="joy" value="${attr(row.joy)}" placeholder="Joy_1">
+        <button class="del" data-delrow="${i}.${j}">x</button>
+      </div>`;
+      if(row.verification!==undefined) rowsHtml+=`<label>Input verification
+        <select data-i="${i}" data-j="${j}" data-k="verification">
+          <option value="unverified" ${row.verification!=='verified'?'selected':''}>Needs owner verification</option>
+          <option value="verified" ${row.verification==='verified'?'selected':''}>Verified with hardware owner</option>
+        </select></label>`;
+    });
+    card.innerHTML=`<div class="hd">
+        <input type="text" data-i="${i}" data-k="label" value="${attr(b.label)}" placeholder="Label (A1...)">
+        <button class="ghost" data-setbtn="${i}" title="Set/move the button point">${b.button_xy?'● btn':'Set btn'}</button>
+        ${b.button_xy?`<button class="ghost" data-clrbtn="${i}" title="Remove only the red point">✕ pt</button>`:''}
+        <button class="del" data-delbox="${i}" title="Delete the whole box">Del box</button>
+      </div>
+      ${rowsHtml}
+      <button class="ghost" data-addrow="${i}" style="font-size:.78rem;padding:3px 8px">+ row</button>`;
+    card.addEventListener('click',e=>{
+      if(isEditable(e.target) || e.target.tagName==='BUTTON') return;
+      if(e.shiftKey){ toggleSel(i); } else if(sel===i && selSet.size===1){ return; } else { selectOnly(i); }
+      renderPanel(); renderStage();
+    });
+    c.appendChild(card);
+  });
+  bindPanel();
+  // Selecting a single box on the photo brings its card into view, so the
+  // rows to edit are right there (multi-select would fight the scrollbar)
+  if(selSet.size===1 && sel>=0 && c.children[sel]){
+    c.children[sel].scrollIntoView({block:'nearest'});
+  }
+}
+
+function bindPanel(){
+  $("#boxes").querySelectorAll('input,select').forEach(el=>{
+    el.addEventListener('change',()=>{
+      const i=+el.dataset.i, k=el.dataset.k;
+      snapshot('edit');
+      if(el.dataset.j!==undefined){
+        const j=+el.dataset.j; let v=el.value; if(k==='number'&&v==='')v=null;
+        const row=state.boxes[i].rows[j]; row[k]=v;
+        if(k==='joy' && row.verification!==undefined){ row.verification='unverified'; renderPanel(); }
+      }
+      else if(k==='label'){ state.boxes[i].label=el.value; }
+      renderStage();
+    });
+  });
+  $("#boxes").querySelectorAll('[data-setbtn]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();setBtnFor=+b.dataset.setbtn;$("#status").textContent="Click the button on the photo…";}));
+  $("#boxes").querySelectorAll('[data-clrbtn]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();snapshot('clrbtn');state.boxes[+b.dataset.clrbtn].button_xy=null;$("#status").textContent="Point removed.";renderPanel();renderStage();}));
+  $("#boxes").querySelectorAll('[data-delbox]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const i=+b.dataset.delbox;if(!confirm('Delete the whole box "'+(state.boxes[i].label||'box '+(i+1))+'"? (Ctrl+Z to undo)'))return;snapshot('delbox');state.boxes.splice(i,1);clearSel();renderPanel();renderStage();}));
+  $("#boxes").querySelectorAll('[data-addrow]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const i=+b.dataset.addrow;snapshot('addrow');(state.boxes[i].rows=state.boxes[i].rows||[]).push({symbol:'',number:null,joy:'',type:'Digital'});renderPanel();renderStage();}));
+  $("#boxes").querySelectorAll('[data-delrow]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const[i,j]=b.dataset.delrow.split('.').map(Number);snapshot('delrow');state.boxes[i].rows.splice(j,1);renderPanel();renderStage();}));
+}
+
+function mapping(){
+  const did=$("#deviceid").value.trim();
+  const ids=[...new Set([did,...(state.device_ids||[])].filter(Boolean).map(id=>id.trim().toUpperCase()))];
+  return {...state,title:$("#title").value, image:state.image, device_ids:ids,
+          styling:state.styling||'Group', width:state.width, height:state.height, boxes:state.boxes};
+}
+
+// Blank scaffold: same grouping/layout heuristics as scripts/scaffold.py,
+// for proactive mappings built from manufacturer docs (no .binds yet).
+$("#btnscaffold").addEventListener('click',()=>{
+  const nb=+$("#sc_btn").value||0, np=+$("#sc_pov").value||0;
+  const axes=[...document.querySelectorAll('.sc_ax:checked')].map(c=>c.value);
+  const W=state.width||4400, H=state.height||2560, k=W/4400;
+  const colW=Math.round(W*0.314), colX=[Math.round(W*0.016), W-colW-Math.round(W*0.016)];
+  const boxes=[];
+  for(let s=1;s<=nb;s+=6){
+    const e=Math.min(nb,s+5);
+    boxes.push({label:e>s?`BTN ${s}-${e}`:`BTN ${s}`,
+      rows:Array.from({length:e-s+1},(_,q)=>({symbol:'press',number:String(s+q),joy:'Joy_'+(s+q),type:'Digital'}))});
+  }
+  for(let p=1;p<=np;p++)
+    boxes.push({label:'POV'+p, rows:['Up','Right','Down','Left'].map(d=>({symbol:d.toLowerCase(),number:null,joy:`Joy_POV${p}${d}`,type:'Digital'}))});
+  const albl={Z:'AXIS Z (twist)',RX:'AXIS RX',RY:'AXIS RY',RZ:'AXIS RZ',U:'AXIS U (slider)',V:'AXIS V (dial)'};
+  const stick=['X','Y'].filter(a=>axes.includes(a));
+  if(stick.length) boxes.push({label:'STICK', rows:stick.map(a=>({symbol:null,number:a,joy:`Joy_${a}Axis`,type:'Analogue'}))});
+  axes.filter(a=>a!=='X'&&a!=='Y').forEach(a=>
+    boxes.push({label:albl[a]||('AXIS '+a),rows:[{symbol:null,number:a,joy:`Joy_${a}Axis`,type:'Analogue'}]}));
+  let col=0,y=Math.round(H*0.08);
+  boxes.forEach(b=>{
+    const h=Math.round((40+72*Math.max(1,b.rows.length))*k);
+    if(col===0 && y+h>H-Math.round(100*k)){col=1;y=Math.round(H*0.08);}
+    b.box_xy=[colX[Math.min(col,1)],y]; b.box_wh=[colW,h]; b.button_xy=null;
+    y+=h+Math.round(60*k);
+  });
+  if(!state.width){state.width=W;state.height=H;}
+  snapshot('scaffold');
+  state.boxes=state.boxes.concat(boxes);
+  clearSel(); renderPanel(); renderStage();
+  $("#status").textContent=boxes.length+" boxes generated.";
+});
+
+$("#btnaddbox").addEventListener('click',()=>{
+  if(!state.image){ alert("Upload an image first."); return; }
+  snapshot('addbox');
+  const w=Math.round(state.width*0.28);
+  state.boxes.push({label:'A'+(state.boxes.length+1), box_xy:[40,40], box_wh:[w,160], button_xy:null, rows:[]});
+  selectOnly(state.boxes.length-1); renderPanel(); renderStage();
+});
+
+bindAsync('#btnupload',async()=>{
+  const f=$("#file").files[0]; if(!f){alert("Pick an image file.");return;}
+  const fd=new FormData(); fd.append('image',f); fd.append('name',$("#imgname").value||f.name);
+  if($("#pad").checked) fd.append('pad','1');
+  $("#status").textContent="Upload…";
+  const j=await requestJSON('/admin/mapping-editor/upload',{method:'POST',body:fd});
+  if(j.error) throw new Error(j.error);
+  snapshot('upload');
+  // Rescale existing boxes (e.g. a scaffolded draft on the nominal canvas)
+  // proportionally onto the real image dimensions.
+  if(state.boxes.length && state.width && state.height && (state.width!==j.width || state.height!==j.height)){
+    const fx=j.width/state.width, fy=j.height/state.height;
+    state.boxes.forEach(b=>{
+      b.box_xy=[Math.round(b.box_xy[0]*fx),Math.round(b.box_xy[1]*fy)];
+      b.box_wh=[Math.round(b.box_wh[0]*fx),Math.round(b.box_wh[1]*fy)];
+      if(b.button_xy) b.button_xy=[Math.round(b.button_xy[0]*fx),Math.round(b.button_xy[1]*fy)];
+    });
+  }
+  state.image=j.name; state.width=j.width; state.height=j.height; $("#imgname").value=j.name;
+  loadImage(j.name); autosave();
+  $("#status").textContent=`Image ${j.name} (${j.width}x${j.height})`;
+});
+
+// Manufacturer AcroForm sheet import: artwork + pre-positioned no_chrome boxes
+$("#btnpdf").addEventListener('click',()=>$("#pdffile").click());
+bindAsync('#pdffile',async()=>{
+  const f=$("#pdffile").files[0]; if(!f) return;
+  const fd=new FormData(); fd.append('pdf',f); fd.append('name',$("#imgname").value||f.name);
+  $("#status").textContent="Importing PDF…";
+  const j=await requestJSON('/admin/mapping-editor/import-pdf',{method:'POST',body:fd});
+  if(j.error) throw new Error(j.error);
+  snapshot('importpdf');
+  state.image=j.name; state.width=j.width; state.height=j.height; state.boxes=j.boxes;
+  for(const key of ['input_verification_required','source_credit','import_format','review_note']) {
+    delete state[key];
+    if(j[key]!==undefined) state[key]=j[key];
+  }
+  $("#imgname").value=j.name;
+  if(!$("#title").value) $("#title").value=j.title||'';
+  clearSel();
+  loadImage(j.name); autosave();
+  $("#status").textContent=`PDF imported: ${j.boxes.length} boxes pre-positioned (${j.width}x${j.height})`;
+  if(j.review_note) $("#status").textContent+=' '+j.review_note;
+  $("#pdffile").value='';
+},'change');
+
+// ---- mapping JSON export / import (backup, sharing, forum review) ----
+$("#btnjsondl").addEventListener('click',()=>{
+  const m=mapping();
+  const name=(m.image||$("#deviceid").value.trim()||'mapping')+'.json';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(m,null,2)],{type:'application/json'}));
+  a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  $("#status").textContent="Downloaded "+name;
+});
+$("#btnjsonimp").addEventListener('click',()=>$("#jsonfile").click());
+bindAsync('#jsonfile',async()=>{
+  const f=$("#jsonfile").files[0]; if(!f) return;
+  let m;
+  try{ m=JSON.parse(await f.text()); }
+  catch(e){ $("#status").textContent="Import error: not valid JSON."; $("#jsonfile").value=''; return; }
+  const pair=(v,positive=false)=>Array.isArray(v)&&v.length===2&&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&(positive?n>0:n>=0));
+  const boxesOk=m && typeof m==='object' && Array.isArray(m.boxes) && m.boxes.every(b=>
+    b && pair(b.box_xy)&&pair(b.box_wh,true)&&(!b.button_xy||pair(b.button_xy))&&
+    Array.isArray(b.rows)&&b.rows.every(r=>r&&typeof r==='object'&&typeof(r.joy||'')==='string')) &&
+    (!m.device_ids || (Array.isArray(m.device_ids)&&m.device_ids.every(id=>typeof id==='string'))) &&
+    ['width','height'].every(k=>typeof m[k]==='number'&&Number.isFinite(m[k])&&m[k]>0);
+  if(!boxesOk){ $("#status").textContent="Import error: no valid boxes[] in this file."; $("#jsonfile").value=''; return; }
+  if(state.boxes.length && !confirm("Replace the current "+state.boxes.length+" boxes with the imported mapping? (Ctrl+Z to undo)")){
+    $("#jsonfile").value=''; return;
+  }
+  snapshot('importjson');
+  const knownIds=mapping().device_ids;
+  state=Object.assign({title:'',image:null,width:0,height:0,boxes:[]}, m);
+  if(mappingId) state.device_ids=[...new Set([...knownIds,...(state.device_ids||[])])];
+  $("#title").value=m.title||'';
+  if(Array.isArray(m.device_ids)&&m.device_ids[0]&&!$("#deviceid").value) $("#deviceid").value=m.device_ids[0];
+  $("#imgname").value=m.image||'';
+  clearSel();
+  if(state.image){ loadImage(state.image); } else { img.removeAttribute('src');renderPanel(); renderStage(); }
+  autosave();
+  $("#status").textContent="Imported "+state.boxes.length+" boxes from "+f.name;
+  $("#jsonfile").value='';
+},'change');
+
+bindAsync('#btnpreview',async()=>{
+  if(!state.image){alert("No image.");return;}
+  $("#status").textContent="Rendering…";
+  const j=await requestJSON('/admin/mapping-editor/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mapping:mapping()})});
+  if(j.error) throw new Error(j.error);
+  $("#preview").innerHTML='<h2>Preview</h2><img src="'+j.url+'?t='+Date.now()+'">';
+  $("#status").textContent="Preview OK";
+});
+
+bindAsync('#btnsave',async()=>{
+  const did=$("#deviceid").value.trim();
+  if(!did){alert("Enter a Device ID.");return;}
+  if(!state.image){alert("No image.");return;}
+  $("#status").textContent="Saving…";
+  flushDraft();
+  const j=await requestJSON('/admin/mapping-editor/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mapping_id:mappingId,device_id:did,device_name:$("#title").value,mapping:mapping(),base_updated_at:baseUpdatedAt})});
+  if(!j.ok) throw new Error(j.error||'Save failed. Download JSON before leaving.');
+  clearTimeout(saveTimer);
+  state.device_ids=j.device_ids||mapping().device_ids;
+  dirty=false; baseUpdatedAt=j.updated_at; mappingId=j.id; savedDeviceId=did;
+  $('#deviceid').readOnly=true;
+  try{ if(localStorage.getItem(LS_KEY)===storedRecoveryValue) localStorage.removeItem(LS_KEY); }catch(e){}
+  storedRecoveryValue=null;
+  LS_KEY='mapedit:v2:'+EDITOR_USER+':'+did.toUpperCase();
+  history.replaceState(null,'',location.pathname+'?device='+encodeURIComponent(did));
+  renderStage();
+  $('#status').textContent='Draft saved. '+(j.public_status==='published'?'The public revision is unchanged.':'Not public yet.')+' An admin can publish it after review.';
+});
+
+// ---- zoom / pan / keyboard / draft restore ----
+$("#zoomin").addEventListener('click',()=>setZoom(((zoom??scale)||1)*1.25));
+$("#zoomout").addEventListener('click',()=>setZoom(((zoom??scale)||1)/1.25));
+$("#zoomfit").addEventListener('click',()=>{zoom=null;applyZoom();renderStage();});
+$("#btnundo").addEventListener('click',undo);
+$("#btnredo").addEventListener('click',redo);
+
+wrap.addEventListener('wheel',e=>{
+  if(!e.ctrlKey) return;
+  e.preventDefault();
+  setZoom(((zoom??scale)||1)*(e.deltaY<0?1.15:1/1.15), e.clientX, e.clientY);
+},{passive:false});
+
+wrap.addEventListener('mousedown',e=>{
+  if(!spaceDown) return;
+  e.preventDefault();
+  const sx=e.clientX, sy=e.clientY, sl=wrap.scrollLeft, st=wrap.scrollTop;
+  function mv(ev){ wrap.scrollLeft=sl-(ev.clientX-sx); wrap.scrollTop=st-(ev.clientY-sy); }
+  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+});
+
+function isEditable(t){ return t && (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'); }
+document.addEventListener('keydown',e=>{
+  if(saveInFlight || pendingRecovery) return;
+  if(isEditable(e.target)) return;
+  if(e.code==='Space'){ spaceDown=true; wrap.classList.add('panning'); e.preventDefault(); return; }
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
+  if((e.ctrlKey||e.metaKey) && (e.key.toLowerCase()==='y' || (e.shiftKey && e.key.toLowerCase()==='z'))){ e.preventDefault(); redo(); return; }
+  if(!selSet.size) return;
+  const step=e.shiftKey?10:1, idxs=[...selSet].filter(k=>state.boxes[k]);
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='d'){
+    e.preventDefault(); snapshot('dup');
+    const first=state.boxes.length;
+    idxs.forEach(k=>{
+      const b=state.boxes[k], c=JSON.parse(JSON.stringify(b));
+      c.box_xy=[b.box_xy[0]+20,b.box_xy[1]+20]; c.label=(b.label||'box')+' copy'; c.button_xy=null;
+      state.boxes.push(c);
+    });
+    sel=state.boxes.length-1; selSet=new Set(Array.from({length:state.boxes.length-first},(_,q)=>first+q));
+    renderPanel(); renderStage(); return;
+  }
+  if(e.key==='Delete'){
+    e.preventDefault(); snapshot('del');
+    idxs.sort((a,b)=>b-a).forEach(k=>state.boxes.splice(k,1));
+    clearSel(); renderPanel(); renderStage(); return;
+  }
+  const mv={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[e.key];
+  if(mv){
+    e.preventDefault(); snapshot('arrow');
+    idxs.forEach(k=>{ const b=state.boxes[k]; b.box_xy=[Math.max(0,b.box_xy[0]+mv[0]),Math.max(0,b.box_xy[1]+mv[1])]; });
+    renderStage();
+  }
+});
+document.addEventListener('keyup',e=>{ if(e.code==='Space'){ spaceDown=false; wrap.classList.remove('panning'); }});
+
+// hint language toggle (mappers are mostly English-speaking; EN by default)
+function setHintLang(l){
+  ['en','fr','es'].forEach(x=>{ $("#hint_"+x).hidden = (x!==l); });
+  document.querySelectorAll('#hint [data-lang]').forEach(a=>a.style.fontWeight = a.dataset.lang===l?'700':'400');
+  try{ localStorage.setItem('mapedit:lang', l); }catch(e){}
+}
+document.querySelectorAll('#hint [data-lang]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();setHintLang(a.dataset.lang);}));
+setHintLang((()=>{ try{ return localStorage.getItem('mapedit:lang')||'en'; }catch(e){ return 'en'; } })());
+
+window.addEventListener('beforeunload',e=>{ flushDraft(); if(dirty){ e.preventDefault(); e.returnValue=''; } });
+window.addEventListener('pagehide',flushDraft);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)flushDraft();});
+["#title","#deviceid"].forEach(s=>{
+  let before=null;
+  $(s).addEventListener('focus',()=>{before=captureDocument();});
+  $(s).addEventListener('input',()=>{
+    if(before){ snapshot('metadata',before);before=null; }
+    dirty=true;autosave();
+  });
+});
+
+window.addEventListener('resize',()=>{ applyZoom(); renderStage(); });
+loadExisting();
+if(!state.image){ renderStage(); renderPanel(); }
+ready=true;
+
+// Do not write anything to recovery storage until the user chooses what to keep.
+(function(){
+  let saved=null, key=LS_KEY;
+  try{
+    storedRecoveryValue=localStorage.getItem(key);
+    saved=JSON.parse(storedRecoveryValue);
+    if(!saved){key=LEGACY_LS_KEY;saved=JSON.parse(localStorage.getItem(key));}
+  }catch(e){$('#status').textContent='Local recovery could not be read. Save or download JSON before leaving.';}
+  if(!saved || !(saved.document?.state || saved.state)) return;
+  const doc=saved.document||{state:saved.state,title:saved.title,deviceid:saved.deviceid,imgname:saved.imgname};
+  pendingRecovery={...saved,document:doc,key};
+  $('#recovery').hidden=false;
+  $('#recoverytext').textContent='Unsaved local work found ('+new Date(saved.ts).toLocaleString()+'). Restore it or discard it before editing.';
+  lockEditing(true);
+})();
+$('#btnrestore').addEventListener('click',()=>{
+  if(!pendingRecovery) return;
+  const saved=pendingRecovery;
+  try{
+    if(!Array.isArray(saved.document.state.boxes)) throw new Error('Invalid local document.');
+    snapshot('restore');
+    // Preserve the draft's base, not the newer server revision loaded underneath.
+    baseUpdatedAt=saved.base_updated_at ?? (mappingId?'unknown-local-base':null);
+    pendingRecovery=null;restoreDocument(saved.document);
+    $('#recovery').hidden=true;lockEditing(false);flushDraft();
+    if(saved.key!==LS_KEY && localStorage.getItem(LS_KEY)===storedRecoveryValue && storedRecoveryValue)
+      localStorage.removeItem(saved.key);
+    $('#status').textContent='Local draft restored. Save checks for changes made by other mappers.';
+  }catch(e){pendingRecovery=saved;$('#status').textContent='Cannot restore this local draft. It has not been deleted.';}
+});
+$('#btndiscardlocal').addEventListener('click',()=>{
+  if(!pendingRecovery || !confirm('Discard this local draft? The server version is kept.')) return;
+  try{localStorage.removeItem(pendingRecovery.key);}catch(e){return;}
+  pendingRecovery=null;$('#recovery').hidden=true;lockEditing(false);
+  storedRecoveryValue=null;
+  $('#status').textContent='Local draft discarded. The server version is unchanged.';
+  autosave();
+});
+if(EXISTING?._unsaved_seed){dirty=true;autosave();}
+</script>
+</body>
+</html>

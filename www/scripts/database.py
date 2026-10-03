@@ -7,6 +7,8 @@ SQLite database for storing configurations and device information.
 
 import sqlite3
 import datetime
+import json
+import re
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -77,11 +79,64 @@ def init_db(db_path):
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             
+            -- Named admin-panel users (role 'admin' = full panel,
+            -- 'mapper' = controllers + mapping editor only)
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'mapper',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            );
+
+            -- Audit trail of controller-mapping actions (who did what when)
+            CREATE TABLE IF NOT EXISTS mapping_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mapping_id INTEGER,
+                device_id TEXT,
+                action TEXT NOT NULL,
+                actor TEXT,
+                detail TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Saved revisions of controller mappings (rollback safety net for
+            -- autonomous mapper work; pruned to the most recent per mapping)
+            CREATE TABLE IF NOT EXISTS controller_mapping_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mapping_id INTEGER NOT NULL,
+                device_name TEXT,
+                mapping_json TEXT NOT NULL,
+                saved_by TEXT,
+                saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Unknown controllers seen at generation time (admin triage queue)
+            CREATE TABLE IF NOT EXISTS unknown_device_sightings (
+                device_id TEXT PRIMARY KEY,
+                sighting_count INTEGER NOT NULL DEFAULT 1,
+                last_run_id TEXT,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Runtime aliases for legacy templates, reviewed by a mapper.
+            -- This keeps hardware-ID additions out of the source file while
+            -- allowing a confirmed variant to use an existing legacy card.
+            CREATE TABLE IF NOT EXISTS legacy_device_aliases (
+                device_id TEXT PRIMARY KEY,
+                legacy_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT
+            );
+
             -- Create indexes
             CREATE INDEX IF NOT EXISTS idx_config_created ON configurations(created_at);
             CREATE INDEX IF NOT EXISTS idx_config_public ON configurations(is_public);
             CREATE INDEX IF NOT EXISTS idx_config_devices_config ON config_devices(config_id);
             CREATE INDEX IF NOT EXISTS idx_controller_mappings_device ON controller_mappings(device_id);
+            CREATE INDEX IF NOT EXISTS idx_mapping_versions_mapping ON controller_mapping_versions(mapping_id);
         """)
         
         # Initialize backup-related tables
@@ -93,6 +148,43 @@ def init_db(db_path):
             conn.execute("ALTER TABLE configurations ADD COLUMN keyboard_display TEXT DEFAULT 'text'")
         except Exception:
             pass  # Column already exists
+
+        # Draft/review workflow for controller mappings (mapper saves are
+        # drafts, hidden from public rendering until an admin publishes).
+        # Pre-existing mappings default to published.
+        for ddl in ("ALTER TABLE controller_mappings ADD COLUMN status TEXT NOT NULL DEFAULT 'published'",
+                    "ALTER TABLE controller_mappings ADD COLUMN updated_by TEXT"):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass  # Column already exists
+
+        migrate_controller_publications(conn)
+
+
+def migrate_controller_publications(conn):
+    """Preserve the currently published document before introducing draft edits.
+
+    Additive and repeatable: never replace an existing publication snapshot.
+    """
+    columns = {r[1] for r in conn.execute('PRAGMA table_info(controller_mappings)')}
+    for name, definition in (('published_snapshot', 'TEXT'),
+                             ('has_draft', 'INTEGER NOT NULL DEFAULT 0')):
+        if name not in columns:
+            try:
+                conn.execute(f'ALTER TABLE controller_mappings ADD COLUMN {name} {definition}')
+            except sqlite3.OperationalError as exc:
+                if 'duplicate column name' not in str(exc):
+                    raise
+    for row in conn.execute("SELECT * FROM controller_mappings WHERE status = 'published' "
+                            "AND published_snapshot IS NULL").fetchall():
+        conn.execute('UPDATE controller_mappings SET published_snapshot = ? WHERE id = ?',
+                     (json.dumps(_publication_document(dict(row))), row['id']))
+
+
+def _publication_document(row):
+    return {key: row[key] for key in ('device_name', 'template_name', 'image_filename',
+                                     'image_width', 'image_height', 'mapping_json')}
 
 
 @contextmanager
@@ -115,7 +207,8 @@ def get_db():
 
 def create_configuration(config_id, description='', styling='None', display_groups=None,
                          devices=None, keyboard_display='text', unhandled_warnings='',
-                         device_warnings='', misc_warnings='', created_at=None):
+                         device_warnings='', misc_warnings='', created_at=None,
+                         is_public=True):
     """Create a new configuration in the database.
     
     Args:
@@ -134,12 +227,14 @@ def create_configuration(config_id, description='', styling='None', display_grou
     
     with get_db() as conn:
         conn.execute("""
-            INSERT OR REPLACE INTO configurations 
+            INSERT OR REPLACE INTO configurations
             (id, description, styling, keyboard_display, created_at,
-             unhandled_devices_warnings, device_warnings, misconfiguration_warnings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (config_id, description, styling, keyboard_display, created_at, 
-              unhandled_warnings, device_warnings, misc_warnings))
+             unhandled_devices_warnings, device_warnings, misconfiguration_warnings,
+             is_public)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (config_id, description, styling, keyboard_display, created_at,
+              unhandled_warnings, device_warnings, misc_warnings,
+              1 if is_public else 0))
         
         # Insert display groups
         if display_groups:
@@ -391,7 +486,8 @@ def get_all_config_ids():
 # ============== Controller Mapping CRUD ==============
 
 def create_controller_mapping(device_id, device_name, template_name, image_filename,
-                               image_width, image_height, mapping_json):
+                               image_width, image_height, mapping_json,
+                               status='published', updated_by=None):
     """Create a new controller mapping.
     
     Args:
@@ -411,13 +507,19 @@ def create_controller_mapping(device_id, device_name, template_name, image_filen
     
     with get_db() as conn:
         cursor = conn.execute("""
-            INSERT INTO controller_mappings 
+            INSERT INTO controller_mappings
             (device_id, device_name, template_name, image_filename,
-             image_width, image_height, mapping_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             image_width, image_height, mapping_json, created_at, updated_at,
+             status, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (device_id, device_name, template_name, image_filename,
-              image_width, image_height, mapping_json, now, now))
-        
+              image_width, image_height, mapping_json, now, now,
+              status, updated_by))
+        if status == 'published':
+            row = conn.execute('SELECT * FROM controller_mappings WHERE id = ?',
+                               (cursor.lastrowid,)).fetchone()
+            conn.execute('UPDATE controller_mappings SET published_snapshot = ? WHERE id = ?',
+                         (json.dumps(_publication_document(dict(row))), cursor.lastrowid))
         return cursor.lastrowid
 
 
@@ -440,18 +542,23 @@ def get_controller_mapping(mapping_id):
 
 def get_controller_mapping_by_device_id(device_id):
     """Get a controller mapping by device ID.
-    
+
+    Case-insensitive: Elite .binds emit device IDs in uppercase hex, but a
+    mapper may type them in any case in the editor. Matching on UPPER() keeps
+    a lowercase-entered mapping working (and out of the unknown-device queue).
+
     Args:
         device_id: Device ID (e.g., '231D0300')
-        
+
     Returns:
         Dictionary with mapping data or None
     """
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM controller_mappings WHERE device_id = ?", (device_id,)
+            "SELECT * FROM controller_mappings WHERE UPPER(device_id) = UPPER(?)",
+            (device_id,)
         ).fetchone()
-        
+
         return dict(row) if row else None
 
 
@@ -481,7 +588,8 @@ def update_controller_mapping(mapping_id, **kwargs):
     import datetime
     
     allowed_fields = {'device_name', 'template_name', 'image_filename',
-                      'image_width', 'image_height', 'mapping_json'}
+                      'image_width', 'image_height', 'mapping_json',
+                      'status', 'updated_by'}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
     
     if not updates:
@@ -507,3 +615,320 @@ def delete_controller_mapping(mapping_id):
     """
     with get_db() as conn:
         conn.execute("DELETE FROM controller_mappings WHERE id = ?", (mapping_id,))
+
+
+def save_mapping_version(mapping_id, device_name, mapping_json, saved_by=None,
+                         keep=20):
+    """Record a mapping revision (called on every editor save/rollback),
+    pruning history beyond the `keep` most recent entries."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO controller_mapping_versions
+            (mapping_id, device_name, mapping_json, saved_by)
+            VALUES (?, ?, ?, ?)
+        """, (mapping_id, device_name, mapping_json, saved_by))
+        conn.execute("""
+            DELETE FROM controller_mapping_versions
+            WHERE mapping_id = ? AND id NOT IN (
+                SELECT id FROM controller_mapping_versions
+                WHERE mapping_id = ? ORDER BY id DESC LIMIT ?
+            )
+        """, (mapping_id, mapping_id, keep))
+
+
+def list_mapping_versions(mapping_id):
+    """Version history of one mapping, newest first (no mapping_json payload)."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, mapping_id, device_name, saved_by, saved_at,
+                   length(mapping_json) AS json_size
+            FROM controller_mapping_versions
+            WHERE mapping_id = ? ORDER BY id DESC
+        """, (mapping_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_mapping_version(version_id):
+    """One full version row (with mapping_json) or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM controller_mapping_versions WHERE id = ?",
+            (version_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_controller_mappings():
+    """Return all controller mappings as full dicts (including mapping_json).
+
+    Used at generation time to build a device-id -> mapping index for the
+    data-driven render path.
+    """
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM controller_mappings").fetchall()
+        return [dict(r) for r in rows]
+
+
+class MappingConflict(ValueError):
+    """The submitted base is stale or the requested identity already exists."""
+
+
+def _record_mapping_version(conn, row, actor):
+    conn.execute('INSERT INTO controller_mapping_versions '
+                 '(mapping_id, device_name, mapping_json, saved_by) VALUES (?, ?, ?, ?)',
+                 (row['id'], row['device_name'], row['mapping_json'], actor))
+    conn.execute('DELETE FROM controller_mapping_versions WHERE mapping_id = ? AND id NOT IN '
+                 '(SELECT id FROM controller_mapping_versions WHERE mapping_id = ? '
+                 'ORDER BY id DESC LIMIT 20)', (row['id'], row['id']))
+
+
+def save_controller_draft(device_id, device_name, mapping, actor, base_updated_at=None,
+                          mapping_id=None):
+    """Save a draft and its history in one serialized transaction, never publish.
+
+    Existing aliases are preserved even for older clients sending only one ID.
+    BEGIN IMMEDIATE makes checking the base and updating it one atomic operation.
+    """
+    import copy
+    document = copy.deepcopy(mapping)
+    device_id = str(device_id).strip().upper()
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if mapping_id is not None:
+            row = conn.execute('SELECT * FROM controller_mappings WHERE id = ?',
+                               (mapping_id,)).fetchone()
+            if row is None or row['device_id'].upper() != device_id:
+                raise MappingConflict('This mapping was removed or its identity changed. Reload before saving.')
+        else:
+            row = conn.execute('SELECT * FROM controller_mappings WHERE UPPER(device_id) = ?',
+                               (device_id,)).fetchone()
+        previous = dict(row) if row else None
+        if previous and str(previous['updated_at'] or '') != str(base_updated_at or ''):
+            raise MappingConflict('A newer revision exists. Download your JSON, then reload and compare before saving.')
+        if not previous and base_updated_at:
+            raise MappingConflict('The original mapping no longer exists. Download your JSON before reloading.')
+        old_ids = json.loads(previous['mapping_json']).get('device_ids', []) if previous else []
+        document['device_ids'] = list(dict.fromkeys(
+            str(value).strip().upper() for value in
+            [device_id, *old_ids, *(document.get('device_ids') or [])] if str(value).strip()))
+        # A new draft must not silently steal an ID from another controller.
+        wanted = set(document['device_ids'])
+        for other in conn.execute('SELECT * FROM controller_mappings').fetchall():
+            if previous and other['id'] == previous['id']:
+                continue
+            ids = set(str(v).upper() for v in json.loads(other['mapping_json']).get('device_ids', []))
+            ids.add(other['device_id'].upper())
+            if other['published_snapshot']:
+                live = json.loads(other['published_snapshot'])
+                ids.update(str(v).upper() for v in json.loads(live['mapping_json']).get('device_ids', []))
+            if wanted & ids:
+                raise MappingConflict('One of these hardware IDs already belongs to another controller.')
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        payload = json.dumps(document)
+        if previous:
+            if not conn.execute('SELECT 1 FROM controller_mapping_versions WHERE mapping_id = ?',
+                                (previous['id'],)).fetchone():
+                _record_mapping_version(conn, previous, previous.get('updated_by'))
+            mid = previous['id']
+            conn.execute('UPDATE controller_mappings SET device_name = ?, template_name = ?, '
+                         'image_filename = ?, image_width = ?, image_height = ?, mapping_json = ?, '
+                         'updated_at = ?, updated_by = ?, has_draft = 1 WHERE id = ?',
+                         (device_name, document['image'], document['image'] + '.jpg',
+                          document['width'], document['height'], payload, now, actor, mid))
+        else:
+            mid = conn.execute('INSERT INTO controller_mappings '
+                               '(device_id, device_name, template_name, image_filename, image_width, '
+                               'image_height, mapping_json, updated_at, updated_by, status, has_draft) '
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1)",
+                               (device_id, device_name, document['image'], document['image'] + '.jpg',
+                                document['width'], document['height'], payload, now, actor)).lastrowid
+        fresh = dict(conn.execute('SELECT * FROM controller_mappings WHERE id = ?', (mid,)).fetchone())
+        _record_mapping_version(conn, fresh, actor)
+        return fresh
+
+
+def set_controller_publication(mapping_id, state, base_updated_at, actor):
+    """Publish exactly the reviewed revision, or explicitly take it offline."""
+    if state not in ('published', 'draft'):
+        raise ValueError('Invalid publication state.')
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT * FROM controller_mappings WHERE id = ?', (mapping_id,)).fetchone()
+        if not row or str(row['updated_at']) != str(base_updated_at):
+            raise MappingConflict('This mapping changed since you opened the page. Review the latest revision first.')
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        if state == 'published':
+            mapping = json.loads(row['mapping_json'])
+            pending = []
+            for box in mapping.get('boxes', []):
+                for entry in box.get('rows', []):
+                    if mapping.get('input_verification_required') or 'verification' in entry:
+                        valid = re.fullmatch(r'Joy_(?:[1-9][0-9]*|(?:X|Y|Z|RX|RY|RZ|U|V)Axis|POV[1-9][0-9]*(?:Up|Right|Down|Left))', entry.get('joy') or '')
+                        if entry.get('verification') != 'verified' or not valid:
+                            pending.append(box.get('label', 'Unnamed input'))
+            if pending:
+                raise MappingConflict(f'Publication blocked: {len(pending)} input(s) still need a valid game code and owner verification.')
+            conn.execute('UPDATE controller_mappings SET published_snapshot = ?, status = ?, '
+                         'has_draft = 0, updated_at = ?, updated_by = ? WHERE id = ?',
+                         (json.dumps(_publication_document(dict(row))), state, now, actor, mapping_id))
+        else:
+            conn.execute('UPDATE controller_mappings SET status = ?, updated_at = ?, updated_by = ? '
+                         'WHERE id = ?', (state, now, actor, mapping_id))
+
+
+def get_published_controller_mappings():
+    """Public consumers must never read editable draft documents."""
+    result = []
+    for row in get_all_controller_mappings():
+        if row.get('status') != 'published' or not row.get('published_snapshot'):
+            continue
+        result.append({**row, **json.loads(row['published_snapshot'])})
+    return result
+
+
+def record_unknown_device(device_id, run_id):
+    """Upsert a sighting of an unmapped controller (admin triage queue).
+
+    Returns True when this is the FIRST sighting of the device (callers can
+    notify on new hardware without spamming on every upload)."""
+    with get_db() as conn:
+        known = conn.execute(
+            "SELECT 1 FROM unknown_device_sightings WHERE device_id = ?",
+            (device_id,)).fetchone()
+        conn.execute("""
+            INSERT INTO unknown_device_sightings (device_id, last_run_id)
+            VALUES (?, ?)
+            ON CONFLICT(device_id) DO UPDATE SET
+                sighting_count = sighting_count + 1,
+                last_run_id = excluded.last_run_id,
+                last_seen = CURRENT_TIMESTAMP
+        """, (device_id, run_id))
+        return known is None
+
+
+def list_unknown_devices():
+    """Return unknown-device sightings, most requested first."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM unknown_device_sightings
+            ORDER BY sighting_count DESC, last_seen DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def dismiss_unknown_device(device_id):
+    """Remove a device from the unknown-sightings queue."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM unknown_device_sightings WHERE device_id = ?",
+                     (device_id,))
+
+
+def list_legacy_device_aliases():
+    """Return reviewed aliases from hardware IDs to legacy controller keys."""
+    with get_db() as conn:
+        rows = conn.execute(
+            'SELECT device_id, legacy_key, created_at, created_by '
+            'FROM legacy_device_aliases ORDER BY legacy_key, device_id').fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_legacy_device_alias(device_id):
+    with get_db() as conn:
+        row = conn.execute(
+            'SELECT * FROM legacy_device_aliases WHERE device_id = ?',
+            (device_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def attach_legacy_device_alias(device_id, legacy_key, actor):
+    """Persist a mapper-reviewed alias. Existing aliases are never replaced silently."""
+    with get_db() as conn:
+        existing = conn.execute(
+            'SELECT * FROM legacy_device_aliases WHERE device_id = ?',
+            (device_id,)).fetchone()
+        if existing and existing['legacy_key'] != legacy_key:
+            raise ValueError(f'{device_id} is already attached to {existing["legacy_key"]}.')
+        conn.execute(
+            'INSERT OR IGNORE INTO legacy_device_aliases (device_id, legacy_key, created_by) '
+            'VALUES (?, ?, ?)', (device_id, legacy_key, actor))
+
+
+def count_configs_for_device_ids(device_ids):
+    """Count distinct configurations using any of these hardware IDs.
+
+    config_devices.device_key is '<ID>::<index>'; data-driven devices have no
+    display name there, so counting by key prefix is the reliable route.
+    """
+    if not device_ids:
+        return 0
+    with get_db() as conn:
+        clauses = " OR ".join("device_key LIKE ?" for _ in device_ids)
+        row = conn.execute(
+            f"SELECT COUNT(DISTINCT config_id) AS n FROM config_devices WHERE {clauses}",
+            [f"{did}::%" for did in device_ids]).fetchone()
+        return row['n'] if row else 0
+
+
+# ---- controller-mapping audit trail ----
+
+def log_mapping_action(action, actor, mapping_id=None, device_id=None, detail=None):
+    """Append an entry to the mapping audit trail. Never raises."""
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO mapping_audit_log (mapping_id, device_id, action, actor, detail)
+                VALUES (?, ?, ?, ?, ?)
+            """, (mapping_id, device_id, action, actor, detail))
+    except Exception:
+        pass
+
+
+def list_mapping_audit(limit=30):
+    """Return the most recent mapping audit entries."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM mapping_audit_log ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---- admin-panel users (session auth) ----
+
+def create_user(username, password_hash, role='mapper'):
+    """Create a named admin-panel user. Returns the new user id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+            (username, password_hash, role))
+        return cur.lastrowid
+
+
+def get_user_by_username(username):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username = ?",
+                           (username,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_users():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, username, role, created_at, last_login FROM users "
+            "ORDER BY username").fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_user(user_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+def update_user_password(user_id, password_hash):
+    with get_db() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                     (password_hash, user_id))
+
+
+def touch_user_login(user_id):
+    with get_db() as conn:
+        conn.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+                     (user_id,))

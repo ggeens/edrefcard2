@@ -5,7 +5,6 @@ EDRefCard Admin Blueprint
 Flask Blueprint for administration functionality.
 """
 
-import sys
 import re
 import shutil
 from pathlib import Path
@@ -14,7 +13,9 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from scripts import database, parseBindings, slugify
 
 from scripts.models import Config, Errors
-from .auth import require_admin
+from extensions import limiter
+from .auth import (require_admin, require_mapper, current_user,
+                   login_session_user, logout_session_user)
 
 
 
@@ -180,19 +181,6 @@ def toggle_public(config_id):
     return redirect(url_for('admin.list_configs'))
 
 
-@admin_bp.route('/devices')
-@require_admin
-def list_devices():
-    """List all supported devices."""
-    from scripts.bindingsData import supportedDevices
-    
-    # Sort devices by name
-    devices = sorted(supportedDevices.items(), key=lambda x: x[0])
-    
-    return render_template('admin/devices.html', devices=devices)
-
-
-
 @admin_bp.route('/stats')
 @require_admin
 def stats():
@@ -228,14 +216,18 @@ def debug_info():
     www_dir = Path(__file__).parent.parent
     configs_path = Config.configsPath()
     
-    # Directory listing
+    # Directory listing - subdir restricted to the 2-char run-id prefix
+    # folders (rejects path traversal like ../../)
     config_files = []
     subdir = request.args.get('subdir')
-    
+    if subdir and not re.fullmatch(r'[A-Za-z0-9]{1,2}', subdir):
+        config_files.append(f"Invalid subdir {subdir!r}: expected 1-2 alphanumeric characters")
+        subdir = None
+
     list_path = configs_path
     if subdir:
         list_path = configs_path / subdir
-        
+
     if list_path.exists():
         try:
             # List top level standard dirs or files
@@ -266,7 +258,6 @@ def debug_info():
                            wand_path=wand_path,
                            wand_error=wand_error,
                            config_files=config_files,
-                           sys_path=sys.path,
                            recent_errors=RECENT_ERRORS,
                            persistent_logs=persistent_logs,
                            subdir=subdir)
@@ -834,3 +825,620 @@ def maintenance_toggle():
     flash(f'Maintenance mode {status}.', 'success')
     
     return redirect(request.referrer or url_for('admin.dashboard'))
+
+
+# ============== Controller mapping editor (feature B1) ==============
+
+# ============== Session auth (multi-user: admin + mappers) ==============
+
+@admin_bp.route('/login', methods=['GET', 'POST'])
+@limiter.limit("20 per hour", methods=['POST'])
+def login():
+    """Session login form. Accepts DB users (admin/mapper roles) and the
+    env-configured admin. HTTP Basic remains usable for scripts/tools."""
+    error = None
+    if request.method == 'POST':
+        user = login_session_user(request.form.get('username', '').strip(),
+                                  request.form.get('password', ''))
+        if user:
+            nxt = request.form.get('next') or request.args.get('next') or ''
+            if not nxt.startswith('/') or nxt.startswith('//'):
+                nxt = ''
+            if not nxt:
+                nxt = url_for('admin.controllers') if user['role'] == 'mapper' \
+                    else url_for('admin.dashboard')
+            return redirect(nxt)
+        error = 'Invalid username or password.'
+    nxt = request.args.get('next', '')
+    return render_template('admin/login.html', error=error, next=nxt)
+
+
+@admin_bp.route('/logout', methods=['POST'])
+def logout():
+    logout_session_user()
+    return redirect(url_for('admin.login'))
+
+
+@admin_bp.route('/users')
+@require_admin
+def users():
+    """Manage admin-panel users (mappers and additional admins)."""
+    return render_template('admin/users.html', users=database.list_users())
+
+
+@admin_bp.route('/users/create', methods=['POST'])
+@require_admin
+def users_create():
+    from werkzeug.security import generate_password_hash
+    username = (request.form.get('username') or '').strip()
+    password = request.form.get('password') or ''
+    role = request.form.get('role') or 'mapper'
+    if role not in ('admin', 'mapper'):
+        role = 'mapper'
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{3,32}', username) or len(password) < 8:
+        flash('Username 3-32 chars [A-Za-z0-9_.-], password 8+ chars.', 'error')
+        return redirect(url_for('admin.users'))
+    if database.get_user_by_username(username):
+        flash(f'User "{username}" already exists.', 'error')
+        return redirect(url_for('admin.users'))
+    database.create_user(username, generate_password_hash(password), role)
+    flash(f'User "{username}" created ({role}).', 'success')
+    return redirect(url_for('admin.users'))
+
+
+@admin_bp.route('/users/delete', methods=['POST'])
+@require_admin
+def users_delete():
+    user_id = request.form.get('user_id')
+    if user_id:
+        database.delete_user(user_id)
+        flash('User deleted.', 'success')
+    return redirect(url_for('admin.users'))
+
+
+@admin_bp.route('/users/reset', methods=['POST'])
+@require_admin
+def users_reset():
+    from werkzeug.security import generate_password_hash
+    user_id = request.form.get('user_id')
+    password = request.form.get('password') or ''
+    if not user_id or len(password) < 8:
+        flash('Password 8+ chars required.', 'error')
+        return redirect(url_for('admin.users'))
+    database.update_user_password(user_id, generate_password_hash(password))
+    flash('Password updated.', 'success')
+    return redirect(url_for('admin.users'))
+
+
+def _find_mapping_for_device(device_id):
+    """Find a controller mapping by primary device_id, falling back to the
+    attached device_ids list inside mapping_json (same hardware, different
+    hardware ID: country / colour / revision variants)."""
+    import json
+    row = database.get_controller_mapping_by_device_id(device_id)
+    if row:
+        return row
+    did_u = (device_id or '').upper()
+    for r in database.get_all_controller_mappings():
+        try:
+            ids = json.loads(r['mapping_json']).get('device_ids') or []
+            if did_u in [str(x).upper() for x in ids]:
+                return r
+        except Exception:
+            continue
+    return None
+
+
+@admin_bp.route('/controllers')
+@require_mapper
+def controllers():
+    """Control tower: existing data-driven mappings + unknown-device queue."""
+    import json
+    mappings = []
+    for r in database.get_all_controller_mappings():
+        try:
+            m = json.loads(r['mapping_json'])
+        except Exception:
+            m = {}
+        mappings.append({
+            'id': r['id'], 'device_id': r['device_id'],
+            'device_name': r['device_name'],
+            'device_ids': m.get('device_ids') or [r['device_id']],
+            'image': m.get('image'), 'box_count': len(m.get('boxes') or []),
+            'updated_at': r.get('updated_at'),
+            'status': r.get('status', 'published'),
+            'has_draft': r.get('has_draft', False),
+            'updated_by': r.get('updated_by'),
+        })
+    _, role = current_user()
+    unknown = [u for u in database.list_unknown_devices()
+               if _find_mapping_for_device(u['device_id']) is None]
+    # Legacy controllers: baked artwork + coords in bindingsData.py (read-only
+    # here; migrating one to data-driven = create a mapping for its device IDs)
+    from scripts.bindingsData import supportedDevices, apply_legacy_device_aliases
+    aliases = database.list_legacy_device_aliases()
+    apply_legacy_device_aliases(aliases)
+    dd_ids = {did for m in mappings for did in m['device_ids']}
+    alias_by_key = {}
+    for alias in aliases:
+        alias_by_key.setdefault(alias['legacy_key'], []).append(alias['device_id'])
+    legacy = []
+    for key, sd in sorted(supportedDevices.items()):
+        if key == 'Keyboard':
+            continue
+        ids = [h.split('::')[0] for h in sd.get('HandledDevices', [])]
+        legacy.append({
+            'key': key, 'template': sd.get('Template'),
+            'device_ids': sorted(set(ids)),
+            'dd_overlap': any(i in dd_ids for i in ids),
+            'alias_count': len(alias_by_key.get(key, [])),
+        })
+    legacy_targets = [dict(item) for item in legacy]
+
+    def name_clue_score(run_id, target):
+        import re
+        haystack = re.sub(r'[^a-z0-9]+', '', (run_id or '').lower())
+        if not haystack:
+            return 0
+        candidates = [target['key'], target['template']]
+        score = 0
+        for candidate in candidates:
+            needle = re.sub(r'[^a-z0-9]+', '', str(candidate or '').lower())
+            if len(needle) >= 3 and needle in haystack:
+                score = max(score, 100 + len(needle))
+            for token in re.findall(r'[a-z]+|[0-9]+', str(candidate or '').lower()):
+                if len(token) >= 3 and token in haystack:
+                    score = max(score, 20 + len(token))
+        return score
+
+    for unknown_item in unknown:
+        ranked = [(name_clue_score(unknown_item.get('last_run_id'), target), target)
+                  for target in legacy_targets]
+        unknown_item['legacy_suggestions'] = [target for score, target in
+                                              sorted(ranked, key=lambda item: (-item[0], item[1]['key']))
+                                              if score > 0][:5]
+    return render_template('admin/controllers.html', mappings=mappings,
+                           unknown=unknown, mappings_legacy=legacy_targets,
+                           legacy=legacy, role=role,
+                           audit=database.list_mapping_audit(25))
+
+
+@admin_bp.route('/controllers/publish', methods=['POST'])
+@require_admin
+def controllers_publish():
+    """Publish or unpublish a mapping (draft = hidden from public rendering)."""
+    mapping_id = request.form.get('mapping_id')
+    state = request.form.get('state')
+    row = database.get_controller_mapping(mapping_id) if mapping_id else None
+    if not row or state not in ('published', 'draft'):
+        flash('Mapping and target state required.', 'error')
+        return redirect(url_for('admin.controllers'))
+    user_name, _ = current_user()
+    try:
+        database.set_controller_publication(row['id'], state,
+                                            request.form.get('base_updated_at'), user_name)
+    except database.MappingConflict as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('admin.controllers'))
+    database.log_mapping_action('publish' if state == 'published' else 'unpublish',
+                                user_name, row['id'], row['device_id'])
+    flash(f'"{row["device_name"]}" is now {state}.', 'success')
+    return redirect(url_for('admin.controllers'))
+
+
+@admin_bp.route('/controllers/attach', methods=['POST'])
+@require_mapper
+def controllers_attach():
+    """Attach an unknown hardware ID to an existing mapping (variant IDs)."""
+    import json
+    device_id = (request.form.get('device_id') or '').strip().upper()
+    mapping_id = request.form.get('mapping_id')
+    user_name, _ = current_user()
+    if mapping_id and str(mapping_id).startswith('mapping:'):
+        mapping_id = str(mapping_id)[len('mapping:'):]
+    if mapping_id and str(mapping_id).startswith('legacy:'):
+        from scripts.bindingsData import supportedDevices, apply_legacy_device_aliases
+        legacy_key = str(mapping_id)[len('legacy:'):]
+        target = supportedDevices.get(legacy_key)
+        if not device_id or target is None:
+            flash('Device ID and a valid legacy controller are required.', 'error')
+            return redirect(url_for('admin.controllers'))
+        try:
+            database.attach_legacy_device_alias(device_id, legacy_key, user_name)
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('admin.controllers'))
+        apply_legacy_device_aliases([{'device_id': device_id, 'legacy_key': legacy_key}])
+        database.dismiss_unknown_device(device_id)
+        database.log_mapping_action('attach-legacy', user_name, None, device_id,
+                                    f'to legacy "{legacy_key}"')
+        flash(f'{device_id} attached to legacy "{legacy_key}". Verify it with a new upload.', 'success')
+        return redirect(url_for('admin.controllers'))
+    row = database.get_controller_mapping(mapping_id) if mapping_id else None
+    if not device_id or not row:
+        flash('Device ID and mapping required.', 'error')
+        return redirect(url_for('admin.controllers'))
+    m = json.loads(row['mapping_json'])
+    ids = m.get('device_ids') or [row['device_id']]
+    if device_id not in [str(x).upper() for x in ids]:
+        ids.append(device_id)
+    m['device_ids'] = ids
+    try:
+        database.save_controller_draft(row['device_id'], row['device_name'], m, user_name,
+                                       row['updated_at'], row['id'])
+    except database.MappingConflict as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('admin.controllers'))
+    database.dismiss_unknown_device(device_id)
+    database.log_mapping_action('attach', user_name, row['id'], device_id,
+                                f'to "{row["device_name"]}"')
+    flash(f'{device_id} attached to the draft of "{row["device_name"]}". Publish after review.', 'success')
+    return redirect(url_for('admin.controllers'))
+
+
+@admin_bp.route('/controllers/dismiss', methods=['POST'])
+@require_mapper
+def controllers_dismiss():
+    """Drop a device from the unknown queue (not a real controller, etc.)."""
+    device_id = (request.form.get('device_id') or '').strip()
+    if device_id:
+        database.dismiss_unknown_device(device_id)
+        user_name, _ = current_user()
+        database.log_mapping_action('dismiss', user_name, None, device_id)
+        flash(f'{device_id} dismissed.', 'success')
+    return redirect(url_for('admin.controllers'))
+
+
+@admin_bp.route('/controllers/duplicate', methods=['POST'])
+@require_mapper
+def controllers_duplicate():
+    """Duplicate a mapping under a new device ID (L/R or extended variants)."""
+    import json
+    mapping_id = request.form.get('mapping_id')
+    new_device_id = (request.form.get('new_device_id') or '').strip().upper()
+    row = database.get_controller_mapping(mapping_id) if mapping_id else None
+    if not row or not new_device_id:
+        flash('Source mapping and new device ID required.', 'error')
+        return redirect(url_for('admin.controllers'))
+    if _find_mapping_for_device(new_device_id):
+        flash(f'{new_device_id} is already covered by a mapping.', 'error')
+        return redirect(url_for('admin.controllers'))
+    m = json.loads(row['mapping_json'])
+    m['device_ids'] = [new_device_id]
+    template_name = row['template_name']
+    suffix = '(copy)'
+    if request.form.get('mirror'):
+        # L/R variant: flip the clean photo and mirror every coordinate.
+        # Chrome and text are drawn at runtime, so nothing ends up reversed
+        # (unlike baked legacy artwork, cf. the TCA Sidestick Left saga).
+        from PIL import Image as PILImage
+        cdir = Config.configsPath() / 'controllers'
+        res_dir = Path(__file__).parent.parent / 'res'
+        src = next((p for p in (cdir / f'{template_name}.jpg',
+                                res_dir / f'{template_name}.jpg') if p.exists()), None)
+        if src is None:
+            flash(f'Source image "{template_name}.jpg" not found, cannot mirror.', 'error')
+            return redirect(url_for('admin.controllers'))
+        from uuid import uuid4
+        template_name = f'{template_name[:100]}-mirror-{uuid4().hex}'
+        cdir.mkdir(parents=True, exist_ok=True)
+        with PILImage.open(str(src)) as im:
+            flipped = im.transpose(PILImage.FLIP_LEFT_RIGHT)
+            flipped.save(str(cdir / f'{template_name}.jpg'), quality=92)
+            width = m.get('width') or row['image_width'] or im.width
+        for b in m.get('boxes', []):
+            b['box_xy'][0] = width - b['box_xy'][0] - b['box_wh'][0]
+            if b.get('button_xy'):
+                b['button_xy'][0] = width - b['button_xy'][0]
+        m['image'] = template_name
+        suffix = '(mirror)'
+    m['title'] = f"{m.get('title') or row['device_name']} {suffix}"
+    user_name, _ = current_user()
+    # Duplicates always need adjustment, so they start as drafts
+    mid = database.create_controller_mapping(
+        new_device_id, m['title'], template_name, f'{template_name}.jpg',
+        row['image_width'], row['image_height'], json.dumps(m),
+        status='draft', updated_by=user_name)
+    database.log_mapping_action('duplicate', user_name, mid, new_device_id,
+                                f'from "{row["device_name"]}"' + (' (mirror)' if suffix == '(mirror)' else ''))
+    database.dismiss_unknown_device(new_device_id)
+    flash(f'Mapping duplicated (id {mid}). Open it to adjust.', 'success')
+    return redirect(url_for('admin.mapping_editor', device=new_device_id))
+
+
+@admin_bp.route('/controllers/delete', methods=['POST'])
+@require_admin
+def controllers_delete():
+    """Delete a mapping. Its version history is kept on purpose: with the
+    audit log it makes an accidental delete recoverable (manual restore)."""
+    mapping_id = request.form.get('mapping_id')
+    row = database.get_controller_mapping(mapping_id) if mapping_id else None
+    if not row:
+        flash('Mapping not found.', 'error')
+        return redirect(url_for('admin.controllers'))
+    database.delete_controller_mapping(row['id'])
+    user_name, _ = current_user()
+    database.log_mapping_action('delete', user_name, row['id'], row['device_id'],
+                                f'"{row["device_name"]}"')
+    flash(f'Mapping "{row["device_name"]}" deleted (its version history is kept).', 'success')
+    return redirect(url_for('admin.controllers'))
+
+
+@admin_bp.route('/controllers/history/<int:mapping_id>')
+@require_mapper
+def controllers_history(mapping_id):
+    """Version history of a mapping (rollback safety net)."""
+    row = database.get_controller_mapping(mapping_id)
+    if not row:
+        abort(404)
+    _, role = current_user()
+    return render_template('admin/mapping_history.html', mapping=row,
+                           versions=database.list_mapping_versions(mapping_id),
+                           role=role)
+
+
+@admin_bp.route('/controllers/history/<int:mapping_id>/version/<int:version_id>.json')
+@require_mapper
+def controllers_history_json(mapping_id, version_id):
+    """Raw mapping_json of one version (inspection / manual merge)."""
+    from flask import Response
+    v = database.get_mapping_version(version_id)
+    if not v or v['mapping_id'] != mapping_id:
+        abort(404)
+    return Response(v['mapping_json'], mimetype='application/json')
+
+
+@admin_bp.route('/controllers/rollback', methods=['POST'])
+@require_admin
+def controllers_rollback():
+    """Restore a mapping to a previous version (recorded as a new version)."""
+    import json
+    version_id = request.form.get('version_id')
+    v = database.get_mapping_version(version_id) if version_id else None
+    row = database.get_controller_mapping(v['mapping_id']) if v else None
+    if not v or not row:
+        flash('Version not found.', 'error')
+        return redirect(url_for('admin.controllers'))
+    try:
+        m = json.loads(v['mapping_json'])
+    except Exception:
+        flash('This version holds invalid JSON, not restored.', 'error')
+        return redirect(url_for('admin.controllers_history', mapping_id=row['id']))
+    user_name, _ = current_user()
+    device_name = v.get('device_name') or row['device_name']
+    m.setdefault('image', row['template_name'])
+    m.setdefault('width', row['image_width'])
+    m.setdefault('height', row['image_height'])
+    try:
+        database.save_controller_draft(row['device_id'], device_name, m, user_name,
+                                       request.form.get('base_updated_at'), row['id'])
+    except database.MappingConflict as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('admin.controllers_history', mapping_id=row['id']))
+    database.log_mapping_action('rollback', user_name, row['id'], row['device_id'],
+                                f"to version {v['id']} of {v.get('saved_at')}")
+    flash(f'"{device_name}" restored as a draft from version {v["id"]}. Publish after review.', 'success')
+    return redirect(url_for('admin.controllers_history', mapping_id=row['id']))
+
+
+def _read_binds_xml(run_id):
+    """Return the raw .binds XML of an uploaded config, or None."""
+    try:
+        path = Config(run_id).pathWithSuffix('.binds')
+        with open(str(path), 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+@admin_bp.route('/help')
+@require_mapper
+def mapper_help():
+    """Onboarding guide for mappers (workflow, stamps, rules)."""
+    return render_template('admin/help.html')
+
+
+@admin_bp.route('/mapping-editor')
+@require_mapper
+def mapping_editor():
+    """Interactive click-to-place editor for data-driven controller mappings.
+
+    ?device=<ID> loads the stored mapping for that device.
+    ?device=<ID>&from=<run_id> semi-automates the work from a real .binds:
+      - no stored mapping yet -> auto-scaffold a full draft (grouped boxes,
+        provisional two-column layout) from every input used in that file;
+      - stored mapping exists -> enrich it with the file's not-yet-covered
+        inputs, appended as an UNASSIGNED box (VIRPIL config variance).
+    """
+    import json
+    from scripts import scaffold
+    device_id = request.args.get('device')
+    from_id = request.args.get('from')
+    existing = _find_mapping_for_device(device_id) if device_id else None
+    draft_note = ''
+
+    if device_id and from_id:
+        xml = _read_binds_xml(from_id)
+        if xml is None:
+            draft_note = f'.binds file not found for "{from_id}"'
+        elif existing is None:
+            # Scaffold a brand-new draft mapping from the .binds
+            try:
+                draft = scaffold.scaffold_mapping_from_binds(xml, device_id)
+                existing = {'device_id': device_id, 'device_name': '',
+                            'mapping_json': json.dumps(draft),
+                            'image_width': draft['width'], 'image_height': draft['height']}
+                draft_note = (f'Draft scaffolded from "{from_id}": '
+                              f'{len(draft["boxes"])} boxes (not saved yet)')
+            except Exception as e:
+                draft_note = f'Cannot scaffold: {e}'
+        else:
+            # Enrichment: surface inputs used in this .binds but absent from the mapping
+            try:
+                m = json.loads(existing['mapping_json'])
+                keys = scaffold.extract_device_keys(xml, device_id)
+                missing = scaffold.missing_keys(m, keys)
+                if missing:
+                    m['boxes'] = m['boxes'] + [
+                        {'label': 'UNASSIGNED', 'box_xy': [70, 70],
+                         'box_wh': [1380, 40 + 72 * len(missing)], 'button_xy': None,
+                         'rows': [{'symbol': None, 'number': None, 'joy': k, 'type': 'Digital'}
+                                  for k in missing]}]
+                    existing = dict(existing)
+                    existing['mapping_json'] = json.dumps(m)
+                    draft_note = (f'{len(missing)} inputs from "{from_id}" missing from the mapping, '
+                                  f'added as an UNASSIGNED box (not saved yet)')
+                else:
+                    draft_note = f'Nothing to enrich: "{from_id}" is already covered by the mapping'
+            except Exception as e:
+                draft_note = f'Cannot enrich: {e}'
+
+    if existing and '(not saved yet)' in draft_note:
+        existing = {**existing, '_unsaved_seed': True}
+    existing_json = json.dumps(existing) if existing else 'null'
+    editor_user, _ = current_user()
+    return render_template('admin/mapping_editor.html', existing_json=existing_json,
+                           draft_note=draft_note, editor_user=editor_user)
+
+
+@admin_bp.route('/mapping-editor/upload', methods=['POST'])
+@require_mapper
+def mapping_editor_upload():
+    """Save an uploaded clean controller image to the persistent controllers/ dir."""
+    from flask import jsonify
+    from PIL import Image as PILImage
+    f = request.files.get('image')
+    if not f or not f.filename:
+        return jsonify({'error': 'No image provided'}), 400
+    name = slugify(request.form.get('name') or f.filename.rsplit('.', 1)[0])
+    if not name:
+        return jsonify({'error': 'Invalid name'}), 400
+    from uuid import uuid4
+    name = f'{name[:100]}-{uuid4().hex}'
+    cdir = Config.configsPath() / 'controllers'
+    cdir.mkdir(parents=True, exist_ok=True)
+    try:
+        img = PILImage.open(f.stream).convert('RGB')
+    except Exception as e:
+        return jsonify({'error': f'Bad image: {e}'}), 400
+    if request.form.get('pad'):
+        # Card canvas helper: place the photo in the middle third of a wider
+        # white canvas so boxes get side margins (what was hand-composed for
+        # the AEROMAX card). Skip if the photo is already wide (ratio > 2).
+        if img.width < img.height * 2:
+            canvas = PILImage.new('RGB', (img.width * 3, img.height), 'white')
+            canvas.paste(img, (img.width, 0))
+            img = canvas
+    img.save(str(cdir / f'{name}.jpg'), quality=92)
+    user_name, _ = current_user()
+    database.log_mapping_action('upload-image', user_name, None, None,
+                                f'{name}.jpg ({img.width}x{img.height})')
+    return jsonify({'name': name, 'width': img.width, 'height': img.height,
+                    'url': url_for('web.serve_config', path=f'controllers/{name}.jpg')})
+
+
+@admin_bp.route('/mapping-editor/import-pdf', methods=['POST'])
+@require_mapper
+def mapping_editor_import_pdf():
+    """Import a manufacturer AcroForm reference sheet (VIRPIL-style):
+    returns the rendered artwork image + every writing area as a
+    pre-positioned no_chrome box with its Joy mapping."""
+    from flask import jsonify
+    from scripts.pdf_import import extract_mapping_from_pdf
+    f = request.files.get('pdf')
+    if not f or not f.filename:
+        return jsonify({'error': 'No PDF provided'}), 400
+    pdf_bytes = f.read()
+    if len(pdf_bytes) > 20 * 1024 * 1024:
+        return jsonify({'error': 'PDF too large (20MB max)'}), 400
+    name = slugify(request.form.get('name') or f.filename.rsplit('.', 1)[0])
+    if not name:
+        return jsonify({'error': 'Invalid name'}), 400
+    from uuid import uuid4
+    name = f'{name[:100]}-{uuid4().hex}'
+    try:
+        mapping, jpg = extract_mapping_from_pdf(pdf_bytes)
+    except Exception as e:
+        return jsonify({'error': f'Cannot parse this PDF: {e}'}), 400
+    cdir = Config.configsPath() / 'controllers'
+    cdir.mkdir(parents=True, exist_ok=True)
+    with open(str(cdir / f'{name}.jpg'), 'wb') as out:
+        out.write(jpg)
+    user_name, _ = current_user()
+    database.log_mapping_action('import-pdf', user_name, None, None,
+                                f'{f.filename} -> {name}.jpg, {len(mapping["boxes"])} boxes')
+    return jsonify({**mapping, 'name': name, 'width': mapping['width'], 'height': mapping['height'],
+                    'boxes': mapping['boxes'],
+                    'title': mapping.get('title') or f.filename.rsplit('.', 1)[0],
+                    'url': url_for('web.serve_config', path=f'controllers/{name}.jpg')})
+
+
+@admin_bp.route('/mapping-editor/preview', methods=['POST'])
+@require_mapper
+def mapping_editor_preview():
+    """Render a data-driven preview from a mapping_json (no persistence)."""
+    import os
+    from flask import jsonify, current_app
+    from scripts import createDataDrivenImage
+    mapping = (request.get_json(force=True) or {}).get('mapping')
+    if not mapping or not mapping.get('image'):
+        return jsonify({'error': 'mapping with image required'}), 400
+    os.chdir(current_app.config['WWW_DIR'] / 'scripts')
+    config = Config('ddpreview')
+    config.makeDir()
+    out = config.pathWithNameAndSuffix(mapping['image'], '.jpg')
+    try:
+        if out.exists():
+            out.unlink()
+    except Exception:
+        pass
+    try:
+        createDataDrivenImage(mapping, config, public=True)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'url': url_for('web.serve_config', path=f"dd/ddpreview-{mapping['image']}.jpg")})
+
+
+def _notify_discord_mapping(title, message, fields=None):
+    """Ping the (backup) Discord webhook about mapper activity. Never raises."""
+    try:
+        from .backup import DiscordNotifier
+        DiscordNotifier.from_settings().send_notification(title, message, fields=fields)
+    except Exception:
+        pass
+
+
+@admin_bp.route('/mapping-editor/save', methods=['POST'])
+@require_mapper
+def mapping_editor_save():
+    """Save a draft, preserving the public revision and existing hardware IDs."""
+    from flask import jsonify
+    from scripts.mapping_validation import validate_mapping
+    data = request.get_json(force=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Expected a JSON object.'}), 400
+    mapping = data.get('mapping') or {}
+    try:
+        validate_mapping(mapping)
+        device_id = str(data.get('device_id') or '').strip().upper()
+        if not device_id:
+            raise ValueError('Enter a hardware ID before saving.')
+        device_name = str(data.get('device_name') or mapping.get('title') or '').strip()
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    user_name, role = current_user()
+    try:
+        fresh = database.save_controller_draft(device_id, device_name, mapping, user_name,
+                                               data.get('base_updated_at'), data.get('mapping_id'))
+    except database.MappingConflict as exc:
+        return jsonify({'error': str(exc)}), 409
+    database.log_mapping_action('save-draft', user_name, fresh['id'], device_id,
+                                f"{len(mapping['boxes'])} boxes; public revision unchanged")
+    if role != 'admin':
+        _notify_discord_mapping('Mapping draft saved',
+                                f'{user_name} saved "{device_name}" ({device_id}). Awaiting review on /admin/controllers.')
+    import json
+    return jsonify({'ok': True, 'id': fresh['id'], 'status': 'draft',
+                    'public_status': fresh['status'],
+                    'device_ids': json.loads(fresh['mapping_json'])['device_ids'],
+                    'updated_at': str(fresh['updated_at'])})

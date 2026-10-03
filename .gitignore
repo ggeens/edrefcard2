@@ -31,3 +31,7 @@ WORKFLOW.md
 
 scrape_binds.py
 downloaded_binds/
+
+# Local tooling artefacts
+.playwright-mcp/
+/vpc-120-r_02_upscayl_3x_high-fidelity-4x.png
